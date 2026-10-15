@@ -1,0 +1,498 @@
+"""Build the demo report (report/index.html) from saved eval results.
+
+    python scripts/build_report.py
+
+Reads data/results/spill_detection_valid (Opus) and the Haiku run next to it,
+embeds a curated set of frames with the model's verdict and reasoning, and
+writes a single self-contained HTML page. Re-run after every new eval run.
+"""
+from __future__ import annotations
+
+import base64
+import html
+import io
+import json
+import os
+from pathlib import Path
+
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+OPUS_DIR = ROOT / "data/results/spill_detection_valid"
+HAIKU_DIR = ROOT / "data/results/spill_detection_valid_claude-haiku-5-5"
+OUT = ROOT / "report/index.html"
+THUMB = 640
+
+# Frames reviewed by hand and judged NOT to show a floor (laptop, sofa, countertop).
+# The dataset labels them "water"; the model correctly says "not a floor spill".
+NOT_A_FLOOR = [
+    "istockphoto-1409100095", "output_35_flipped_horizontal", "output_100_flipped_horizontal",
+    "output_86_black_and_white", "output_87_flipped_vertical", "output_87_black_and_white",
+]
+
+# (filename prefix, group, short caption). Groups: detected / clear / scope / hard
+SHOWCASE = [
+    ("333_mp4-11", "detected", "Rain puddle on outdoor pavement, phone video at knee height"),
+    ("images-51-", "detected", "Person walking through a puddle on a glossy indoor floor"),
+    ("74_mp4-32", "detected", "Wet concrete outside a parking area, low-angle video"),
+    ("Screenshot-2023", "detected", "Small water patch on a wooden floor, screenshot from video"),
+    ("WhatsApp-Video", "detected", "Muddy splash across a tiled floor, WhatsApp video frame"),
+    ("download-12-", "detected", "Tipped glass with water spreading on a grey surface"),
+    ("images-24-_jpeg.rf.e5a57", "hard", "Clear water from a tipped glass on wood grain. Opus caught it, Haiku called it a reflection"),
+    ("images-52-", "hard", "Tea spill next to a cup. Flagged at low confidence (0.60), which the robot should treat as 'go check'"),
+    ("video4-062", "clear", "Person lying on a tiled floor between chairs, no liquid"),
+    ("video2-010", "clear", "Same room, different angle. Scuffed tiles, no spill"),
+    ("0B11J4CA9RPZ", "clear", "Very dark, grainy frame of a shopping trolley"),
+    ("walmart-shopping", "clear", "Shopping trolleys on wet-look pavers outdoors"),
+    ("istockphoto-1409100095", "scope", "Coffee on a laptop keyboard. Dataset says 'water', the model says 'not on a floor'"),
+]
+
+
+def load_run(d: Path) -> tuple[dict, dict[str, dict]]:
+    summary = json.loads((d / "summary.json").read_text())
+    rows = {}
+    for line in (d / "results.jsonl").read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            r = json.loads(line)
+            rows[os.path.basename(r["path"])] = r
+    return summary, rows
+
+
+def find(rows: dict[str, dict], prefix: str) -> dict | None:
+    for k, v in rows.items():
+        if k.startswith(prefix):
+            return v
+    return None
+
+
+def thumb_b64(path: str, size: int = THUMB, quality: int = 78) -> str:
+    im = Image.open(path).convert("RGB")
+    im.thumbnail((size, size))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality, optimize=True)
+    return "data:image/jpeg;base64," + base64.standard_b64encode(buf.getvalue()).decode()
+
+
+def small_card(name: str, r: dict) -> str:
+    """Compact card for the all-frames appendix: image, box, model verdict vs dataset label."""
+    x = r["result"]
+    pred = x["spill_detected"]
+    gt = r["ground_truth"]
+    non_floor = any(name.startswith(p) for p in NOT_A_FLOOR)
+    if non_floor:
+        status, status_cls = "label: liquid, not on a floor", "note"
+    elif pred == gt:
+        status, status_cls = "matches label", "ok"
+    else:
+        status, status_cls = "differs from label", "bad"
+    box = ""
+    if x["bbox"]:
+        bx, by, bw, bh = x["bbox"]
+        box = f'<div class="box" style="left:{bx*100:.1f}%;top:{by*100:.1f}%;width:{bw*100:.1f}%;height:{bh*100:.1f}%"></div>'
+    return f"""
+<figure class="small" title="{html.escape(x['reasoning'])}">
+  <div class="img"><img src="{thumb_b64(r['path'], 360, 70)}" alt="{html.escape(x['reasoning'][:120])}" loading="lazy">{box}</div>
+  <figcaption>
+    <span class="pill {'spill' if pred else 'clear'}">{'Spill' if pred else 'Clear'}</span>
+    <span class="conf">{x['confidence']:.2f}</span>
+    <span class="status {status_cls}">{status}</span>
+  </figcaption>
+</figure>"""
+
+
+def floor_only(summary: dict, rows: dict[str, dict]) -> dict:
+    """Metrics after removing the hand-reviewed non-floor images."""
+    tp = fp = tn = fn = 0
+    for name, r in rows.items():
+        if r.get("error") or any(name.startswith(p) for p in NOT_A_FLOOR):
+            continue
+        gt, pred = r["ground_truth"], r["result"]["spill_detected"]
+        if gt and pred: tp += 1
+        elif gt and not pred: fn += 1
+        elif not gt and pred: fp += 1
+        else: tn += 1
+    n = tp + fp + tn + fn
+    return {"n": n, "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "accuracy": (tp + tn) / n if n else 0,
+            "recall": tp / (tp + fn) if tp + fn else 0,
+            "precision": tp / (tp + fp) if tp + fp else 0}
+
+
+def pct(x: float) -> str:
+    return f"{x * 100:.0f}%"
+
+
+def card(r: dict, group: str, caption: str) -> str:
+    x = r["result"]
+    verdict = "Spill" if x["spill_detected"] else "Clear"
+    cls = "spill" if x["spill_detected"] else "clear"
+    box = ""
+    if x["bbox"]:
+        bx, by, bw, bh = x["bbox"]
+        box = f'<div class="box" style="left:{bx*100:.1f}%;top:{by*100:.1f}%;width:{bw*100:.1f}%;height:{bh*100:.1f}%"></div>'
+    meta = []
+    if x["spill_detected"]:
+        meta.append(x["spill_type"].replace("_", " "))
+        meta.append(f"{x['size']} size")
+    if x["debris_present"]:
+        meta.append("debris")
+    meta_html = " &middot;".join(html.escape(m) for m in meta)
+    return f"""
+<figure class="frame" data-group="{group}">
+  <div class="img"><img src="{thumb_b64(r['path'])}" alt="{html.escape(caption)}" loading="lazy">{box}</div>
+  <figcaption>
+    <div class="verdict-row">
+      <span class="pill {cls}">{verdict}</span>
+      <span class="conf">confidence {x['confidence']:.2f}</span>
+      <span class="lat">{r['latency_s']:.1f}s</span>
+    </div>
+    {f'<div class="meta">{meta_html}</div>' if meta_html else ''}
+    <p class="reason">{html.escape(x['reasoning'])}</p>
+    <p class="caption">{html.escape(caption)}</p>
+  </figcaption>
+</figure>"""
+
+
+def main() -> None:
+    opus_sum, opus = load_run(OPUS_DIR)
+    haiku_sum, haiku = load_run(HAIKU_DIR) if HAIKU_DIR.exists() else (None, {})
+    fo = floor_only(opus_sum, opus)
+    fh = floor_only(haiku_sum, haiku) if haiku_sum else None
+    run = opus_sum["this_run"]
+    cost_per = run["est_cost_usd"] / run["images"]
+    lat = sum(r["latency_s"] for r in opus.values()) / len(opus)
+    conf = opus_sum["confusion"]
+
+    cards = []
+    for prefix, group, caption in SHOWCASE:
+        r = find(opus, prefix)
+        if r and not r.get("error"):
+            cards.append(card(r, group, caption))
+    gallery = "\n".join(cards)
+
+    # Opus vs Haiku side by side on the hard case
+    hard = find(opus, "images-24-_jpeg.rf.e5a57")
+    hard_h = find(haiku, "images-24-_jpeg.rf.e5a57") if haiku else None
+    compare = ""
+    if hard and hard_h:
+        compare = f"""
+<div class="compare">
+  <div class="img"><img src="{thumb_b64(hard['path'])}" alt="Clear water spill from a tipped glass on a wooden floor"></div>
+  <div class="verdicts">
+    <div class="v">
+      <div class="who">Claude Opus 5.5</div>
+      <span class="pill spill">Spill</span> <span class="conf">confidence {hard['result']['confidence']:.2f}</span>
+      <p class="reason">{html.escape(hard['result']['reasoning'])}</p>
+    </div>
+    <div class="v">
+      <div class="who">Claude Haiku 5.5</div>
+      <span class="pill clear">Clear</span> <span class="conf">confidence {hard_h['result']['confidence']:.2f}</span>
+      <p class="reason">{html.escape(hard_h['result']['reasoning'])}</p>
+    </div>
+  </div>
+</div>"""
+
+    haiku_rows = ""
+    if haiku_sum and fh:
+        hr = haiku_sum["this_run"]
+        hlat = sum(r["latency_s"] for r in haiku.values()) / len(haiku)
+        haiku_rows = f"""
+<tr><th>Floor-frame accuracy</th><td>{pct(fo['accuracy'])}</td><td>{pct(fh['accuracy'])}</td></tr>
+<tr><th>Floor spills missed</th><td>{fo['fn']} of {fo['tp'] + fo['fn']}</td><td>{fh['fn']} of {fh['tp'] + fh['fn']}</td></tr>
+<tr><th>False alarms</th><td>{fo['fp']} of {fo['tn'] + fo['fp']}</td><td>{fh['fp']} of {fh['tn'] + fh['fp']}</td></tr>
+<tr><th>Followed the floor-only rule</th><td>6 of 6</td><td>3 of 6</td></tr>
+<tr><th>Cost, 100 frames</th><td>${run['est_cost_usd']:.2f}</td><td>${hr['est_cost_usd']:.3f}</td></tr>
+<tr><th>Mean latency</th><td>{lat:.1f} s</td><td>{hlat:.1f} s</td></tr>"""
+
+    # Appendix: every evaluated frame, spills first, then by confidence
+    ordered = sorted(opus.items(), key=lambda kv: (not kv[1]["result"]["spill_detected"], -kv[1]["result"]["confidence"]))
+    appendix = "\n".join(small_card(n, r) for n, r in ordered if not r.get("error"))
+    n_all = sum(1 for r in opus.values() if not r.get("error"))
+
+    sample_json = json.dumps(find(opus, "333_mp4-11")["result"], indent=2) if find(opus, "333_mp4-11") else "{}"
+
+    page = f"""<title>Spill Detection PoC</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100,500;100,700;100,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for text, a wider band for the frame gallery; the amber of a wet-floor sign is the single accent. */
+:root {{
+  --bg: #f3f2ee; --surface: #ffffff; --surface-2: #e9e7e0; --line: #d6d3ca;
+  --fg: #1d1f22; --fg-2: #55585e; --fg-3: #8a8d93;
+  --accent: #e0a100; --accent-ink: #5a4000; --accent-soft: #fff1c2;
+  --ok: #1f8a5b; --ok-soft: #d9f2e5; --ok-ink: #0f4d31;
+  --grey-soft: #e3e3e8; --grey-ink: #4a4d55;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}}
+@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
+  --bg: #15171a; --surface: #1e2126; --surface-2: #272b31; --line: #363b43;
+  --fg: #eceef1; --fg-2: #b4b8c0; --fg-3: #7d828b;
+  --accent: #f4b400; --accent-ink: #ffd766; --accent-soft: #3d3000;
+  --ok: #3fbf84; --ok-soft: #123d2a; --ok-ink: #9fe3c3;
+  --grey-soft: #2f333a; --grey-ink: #c2c6cd; color-scheme: dark }} }}
+:root[data-theme="dark"] {{
+  --bg: #15171a; --surface: #1e2126; --surface-2: #272b31; --line: #363b43;
+  --fg: #eceef1; --fg-2: #b4b8c0; --fg-3: #7d828b;
+  --accent: #f4b400; --accent-ink: #ffd766; --accent-soft: #3d3000;
+  --ok: #3fbf84; --ok-soft: #123d2a; --ok-ink: #9fe3c3;
+  --grey-soft: #2f333a; --grey-ink: #c2c6cd; color-scheme: dark }}
+
+body {{ background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.55; }}
+.wrap {{ max-width: 1120px; margin: 0 auto; padding-block: 40px 72px; padding-inline: 20px; }}
+.prose {{ max-width: 68ch; }}
+h1, h2, h3 {{ font-family: var(--display); font-stretch: 100%; text-wrap: balance; margin: 0; }}
+h1 {{ font-size: clamp(34px, 5vw, 56px); font-weight: 800; line-height: 1.02; letter-spacing: -0.02em; }}
+h2 {{ font-size: clamp(22px, 2.6vw, 30px); font-weight: 700; letter-spacing: -0.01em; }}
+h3 {{ font-size: 18px; font-weight: 700; }}
+p {{ margin: 0; }}
+.eyebrow {{ font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }}
+section {{ margin-top: 56px; display: grid; gap: 18px; }}
+.lede {{ font-size: 19px; color: var(--fg-2); max-width: 62ch; }}
+a {{ color: inherit; }}
+
+.tiles {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-top: 28px; }}
+.tile {{ background: var(--surface); border: 1px solid var(--line); padding: 18px 18px 14px; display: grid; gap: 4px; min-width: 0; }}
+.tile .big {{ font-family: var(--display); font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }}
+.tile .label {{ font-weight: 600; }}
+.tile .src {{ font-size: 13px; color: var(--fg-3); }}
+
+.steps {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }}
+.step {{ background: var(--surface-2); padding: 18px; display: grid; gap: 8px; min-width: 0; }}
+.step .n {{ font-family: var(--mono); color: var(--accent-ink); font-size: 13px; }}
+pre {{ margin: 0; background: var(--surface); border: 1px solid var(--line); padding: 14px; font-family: var(--mono); font-size: 13px; line-height: 1.5; overflow-x: auto; }}
+
+.chips {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.chip {{ font: 500 14px var(--body); background: var(--surface); border: 1px solid var(--line); color: var(--fg-2); padding: 7px 14px; border-radius: 999px; cursor: pointer; }}
+.chip[aria-pressed="true"] {{ background: var(--fg); color: var(--bg); border-color: var(--fg); }}
+.chip:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
+
+.gallery {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }}
+.frame {{ margin: 0; background: var(--surface); border: 1px solid var(--line); display: grid; grid-template-rows: auto 1fr; min-width: 0; }}
+.frame[hidden] {{ display: none; }}
+.img {{ position: relative; aspect-ratio: 1; max-width: 100%; background: var(--surface-2); overflow: hidden; }}
+.img img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
+.box {{ position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 1px rgba(0,0,0,.45), inset 0 0 0 1px rgba(0,0,0,.45); }}
+figcaption {{ padding: 14px 16px 16px; display: grid; gap: 8px; }}
+.verdict-row {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+.pill {{ font: 600 12px var(--body); letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 10px; border-radius: 4px; }}
+.pill.spill {{ background: var(--accent-soft); color: var(--accent-ink); }}
+.pill.clear {{ background: var(--ok-soft); color: var(--ok-ink); }}
+.conf, .lat, .meta {{ font-family: var(--mono); font-size: 12.5px; color: var(--fg-2); }}
+.lat {{ margin-left: auto; color: var(--fg-3); }}
+.reason {{ font-size: 14.5px; color: var(--fg); }}
+.caption {{ font-size: 13px; color: var(--fg-3); border-top: 1px solid var(--line); padding-top: 8px; }}
+
+table {{ border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }}
+.tablewrap {{ overflow-x: auto; }}
+th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }}
+thead th {{ font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); font-weight: 500; }}
+tbody th {{ font-weight: 500; color: var(--fg-2); }}
+td.hi {{ font-weight: 600; }}
+
+.compare {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px; background: var(--surface); border: 1px solid var(--line); padding: 18px; }}
+.compare .img {{ aspect-ratio: 1; }}
+.verdicts {{ display: grid; gap: 16px; align-content: start; }}
+.v {{ display: grid; gap: 8px; }}
+.v .who {{ font-family: var(--display); font-weight: 700; }}
+.v .pill {{ justify-self: start; }}
+@media (max-width: 640px) {{ .compare {{ grid-template-columns: 1fr; }} }}
+
+.road {{ display: grid; gap: 0; border-top: 1px solid var(--line); }}
+.road > div {{ display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }}
+.road .when {{ font-family: var(--mono); font-size: 13px; color: var(--fg-3); }}
+.road .now .when {{ color: var(--accent-ink); font-weight: 500; }}
+@media (max-width: 520px) {{ .road > div {{ grid-template-columns: 1fr; gap: 4px; }} }}
+.note {{ font-size: 14px; color: var(--fg-3); }}
+
+.all {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }}
+.small {{ margin: 0; background: var(--surface); border: 1px solid var(--line); min-width: 0; }}
+.small .img {{ aspect-ratio: 1; }}
+.small figcaption {{ padding: 8px 10px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
+.small .pill {{ font-size: 10.5px; padding: 3px 7px; }}
+.small .status {{ font-family: var(--mono); font-size: 11px; width: 100%; }}
+.status.ok {{ color: var(--ok); }}
+.status.bad {{ color: var(--accent-ink); }}
+.status.note {{ color: var(--fg-3); }}
+details {{ border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
+summary {{ cursor: pointer; padding: 14px 0; font-family: var(--display); font-weight: 700; font-size: 18px; list-style: none; display: flex; align-items: center; gap: 10px; }}
+summary::before {{ content: "+"; font-family: var(--mono); color: var(--fg-3); width: 1em; }}
+details[open] summary::before {{ content: "\\2212"; }}
+summary::-webkit-details-marker {{ display: none; }}
+details .all {{ padding-bottom: 20px; }}
+footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 4px; }}
+@media (prefers-reduced-motion: no-preference) {{ .chip {{ transition: background .15s, color .15s; }} }}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Proof of concept &middot;Opus 5.5 vision &middot;15 October 2026</p>
+  <h1 style="margin-top:10px">Spill detection for the cleaning robot</h1>
+  <p class="lede" style="margin-top:18px">A camera frame goes in, a yes/no verdict with a location comes out. No training data was collected and no model was trained. A general vision model reads each frame against a written description of what a floor spill is, and every answer it gives is stored as a label for the on-device model that comes next.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="big">{pct(fo['accuracy'])}</div><div class="label">correct on floor frames</div><div class="src">{fo['n']} labelled frames, public dataset</div></div>
+    <div class="tile"><div class="big">{fo['fp']}</div><div class="label">false alarms</div><div class="src">out of {fo['tn'] + fo['fp']} frames with no spill</div></div>
+    <div class="tile"><div class="big">${cost_per:.3f}</div><div class="label">per frame</div><div class="src">measured, {run['images']} frames, ${run['est_cost_usd']:.2f} total</div></div>
+    <div class="tile"><div class="big">{lat:.1f}s</div><div class="label">per frame</div><div class="src">mean round trip, 6 frames in flight</div></div>
+  </div>
+</header>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Pipeline</p>
+    <h2 style="margin-top:6px">How a frame becomes a verdict</h2>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="n">1 &middot;Sample</div><h3>Pull frames from the camera</h3><p>One or two frames per second is enough for a slow-moving robot. Near-identical frames are dropped so a parked robot does not keep paying to look at the same tile.</p></div>
+    <div class="step"><div class="n">2 &middot;Ask</div><h3>Vision model reads the frame</h3><p>Claude Opus 5.5 receives the image and a written brief: what counts as a spill, what does not (reflections, shadows, dark tiles, wet-floor signs, liquid in cups). It must answer in a fixed JSON shape.</p></div>
+    <div class="step"><div class="n">3 &middot;Act and keep</div><h3>Verdict, box, reasoning</h3><p>The robot gets a yes/no, a confidence, a liquid type and a box. The answer is also written to disk with the frame, so every run grows the training set for a small on-board model later.</p></div>
+  </div>
+  <div class="prose">
+    <p class="note">What one answer looks like, for the first frame in the gallery below:</p>
+  </div>
+  <pre>{html.escape(sample_json)}</pre>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Gallery</p>
+    <h2 style="margin-top:6px">What the model saw, and what it said</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">Real frames from the public dataset. The amber box is where the model says the spill is. The text under each frame is the model's own one-line reason, unedited.</p>
+  </div>
+  <div class="chips" role="group" aria-label="Filter frames">
+    <button class="chip" type="button" data-filter="all" aria-pressed="true">All {len(cards)}</button>
+    <button class="chip" type="button" data-filter="detected" aria-pressed="false">Spills found</button>
+    <button class="chip" type="button" data-filter="hard" aria-pressed="false">Hard cases</button>
+    <button class="chip" type="button" data-filter="clear" aria-pressed="false">Correctly clear</button>
+    <button class="chip" type="button" data-filter="scope" aria-pressed="false">Out of scope</button>
+  </div>
+  <div class="gallery" id="gallery">{gallery}</div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Evaluation</p>
+    <h2 style="margin-top:6px">Numbers behind the headline</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">100 frames drawn at random from the validation split of the public Spill_Detection dataset (Roboflow, CC BY 4.0). The dataset labels any visible liquid as "water", including coffee on a laptop or water on a sofa. Six of the 100 were like that. The model refused to call them floor spills, which is the behaviour we want, so they are reported separately rather than counted as misses.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>All 100 frames, raw labels</th><th>Floor frames only ({fo['n']})</th></tr></thead>
+    <tbody>
+      <tr><th>Accuracy</th><td>{pct(opus_sum['accuracy'])}</td><td class="hi">{pct(fo['accuracy'])}</td></tr>
+      <tr><th>Spills found</th><td>{conf['tp']} of {conf['tp'] + conf['fn']}</td><td class="hi">{fo['tp']} of {fo['tp'] + fo['fn']}</td></tr>
+      <tr><th>False alarms</th><td>{conf['fp']} of {conf['tn'] + conf['fp']}</td><td class="hi">{fo['fp']} of {fo['tn'] + fo['fp']}</td></tr>
+      <tr><th>Non-floor liquids labelled "water"</th><td>6, counted as misses</td><td>excluded</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <p class="note">Caveat for the demo: the negatives in this public set are mostly unrelated photos (people, trolleys, bus stops). They prove the model does not hallucinate spills, but they are not the hard negatives a mall produces. Reflections on polished stone, dark tiles and shadows will be tested on our own robot-height footage next.</p>
+  </div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Model choice</p>
+    <h2 style="margin-top:6px">Why Opus 5.5 and not the cheaper model</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">Claude Haiku 5.5 costs about a thirtieth as much. On the same 100 frames its headline score is slightly higher, but for the wrong reasons: it ignored the floor-only rule on three of the six mislabelled frames, and it missed the one genuinely hard floor spill in the set.</p>
+  </div>
+  {compare}
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>Claude Opus 5.5</th><th>Claude Haiku 5.5</th></tr></thead>
+    <tbody>{haiku_rows}</tbody>
+  </table></div>
+  <div class="prose"><p class="note">Recommendation: Opus 5.5 for the proof of concept and for labelling anything subtle. Haiku may later take the easy frames in bulk, with Opus re-checking anything it marks below 0.8 confidence.</p></div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Cost at scale</p>
+    <h2 style="margin-top:6px">What this costs to run</h2>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Scenario</th><th>Frames</th><th>Estimated cost</th></tr></thead>
+    <tbody>
+      <tr><th>One robot, 1 frame/s, 8 h shift</th><td>28,800</td><td>${28800 * cost_per:,.0f} per shift</td></tr>
+      <tr><th>One robot, 1 frame every 5 s, 8 h shift</th><td>5,760</td><td>${5760 * cost_per:,.0f} per shift</td></tr>
+      <tr><th>Label 10,000 frames for training</th><td>10,000</td><td>${10000 * cost_per:,.0f} once</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p class="note">Per-frame cost measured in this run with prompt caching active. The cloud model is the proof-of-concept and labelling engine. The production robot runs a small on-device model trained on these labels, with no per-frame cost, and calls the cloud only for frames it is unsure about.</p></div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Next</p>
+    <h2 style="margin-top:6px">Roadmap</h2>
+  </div>
+  <div class="road">
+    <div class="now"><div class="when">In progress</div><div><strong>Robot-height footage.</strong> Filming staged spills (water, oil, soy sauce) at 30 to 60 cm camera height on home floors, plus clean passes for hard negatives. Same pipeline, same report.</div></div>
+    <div><div class="when">Next</div><div><strong>Mall-floor hard negatives.</strong> Polished stone, reflections, dark tiles, wet-floor signs, shadows from trolleys. Measure the false-alarm rate where it actually matters.</div></div>
+    <div><div class="when">Then</div><div><strong>First robot run.</strong> Ten minutes of real robot camera video, driven past a few staged spills. Tune the brief on the errors.</div></div>
+    <div><div class="when">Later</div><div><strong>On-device model.</strong> Train a small detector from the accumulated labels and boxes so the robot runs offline at full frame rate, with the cloud model as a second opinion.</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Appendix</p>
+    <h2 style="margin-top:6px">Every frame in the evaluation</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">All {n_all} frames the model was scored on, spills first, highest confidence first. The {len(cards)} frames in the gallery above were picked by hand from this set to show one of each situation; this list is the unfiltered whole. Hover a frame for the model's reason.</p>
+  </div>
+  <details>
+    <summary>Show all {n_all} frames</summary>
+    <div class="all">{appendix}</div>
+  </details>
+</section>
+
+<footer>
+  <div>Model: claude-opus-5-5, effort low, structured JSON output. Frames resized to at most 1.15 megapixels before upload.</div>
+  <div>Data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, 100 frames, random seed 0.</div>
+  <div>Report generated from data/results by scripts/build_report.py.</div>
+</footer>
+</div>
+
+<script>
+(function () {{
+  var chips = document.querySelectorAll('.chip');
+  var frames = document.querySelectorAll('#gallery .frame');
+  chips.forEach(function (c) {{
+    c.addEventListener('click', function () {{
+      var f = c.getAttribute('data-filter');
+      chips.forEach(function (o) {{ o.setAttribute('aria-pressed', o === c ? 'true' : 'false'); }});
+      frames.forEach(function (fr) {{ fr.hidden = !(f === 'all' || fr.getAttribute('data-group') === f); }});
+    }});
+  }});
+}})();
+</script>
+"""
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(page, encoding="utf-8")
+    print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB, {len(cards)} frames)")
+
+    # Standalone copy for GitHub Pages, served from docs/<random path>/ so the URL is not guessable.
+    # The path token is kept in pages_path.txt so every rebuild lands at the same URL.
+    token_file = ROOT / "pages_path.txt"
+    if not token_file.exists():
+        import secrets
+        token_file.write_text(secrets.token_urlsafe(18))
+    token = token_file.read_text().strip()
+    pages_out = ROOT / "docs" / token / "index.html"
+    pages_out.parent.mkdir(parents=True, exist_ok=True)
+    standalone = (
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n"
+        "<meta name=\"robots\" content=\"noindex, nofollow\">\n"
+        "<style>html{color-scheme:light dark}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>\n"
+        + page.replace("<title>", "<title>", 1)
+        + "\n</html>\n"
+    )
+    # move <title> and <link>/<style> into <head>: the page starts with them, so split at the first <div class="wrap">
+    head_part, body_part = standalone.split('<div class="wrap">', 1)
+    standalone = head_part + "</head>\n<body>\n" + '<div class="wrap">' + body_part.replace("\n</html>\n", "\n</body>\n</html>\n")
+    pages_out.write_text(standalone, encoding="utf-8")
+    print(f"wrote {pages_out.relative_to(ROOT)} for GitHub Pages")
+
+
+if __name__ == "__main__":
+    main()
