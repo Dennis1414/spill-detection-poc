@@ -97,6 +97,23 @@ python scripts/run_eval.py data/frames/my_clip_name
 No labels, so no accuracy number, but `results.csv` gives you the model's call on every frame and
 you can review the positives quickly.
 
+## 6. Demo report
+
+```bash
+python scripts/build_report.py
+```
+
+Writes two copies from the saved results:
+
+- `report/index.html`: the body-only page published as a claude.ai artifact (private, access controlled).
+- `docs/<random path>/index.html`: a standalone page for GitHub Pages. The random path lives in
+  `pages_path.txt` so rebuilds keep the same URL. There is no index at the site root, and the page
+  carries a `noindex` tag, but the repo is public, so treat the URL as obscure rather than private.
+
+To update the public page: rebuild, then commit and push `docs/`. GitHub Pages redeploys in a minute or two.
+Which frames appear in the gallery is set by the `SHOWCASE` list at the top of `scripts/build_report.py`;
+the appendix always shows every frame in the latest Opus run.
+
 ## Cost
 
 Roughly 1,000 to 1,650 input tokens per frame after resizing, plus ~100 to 200 output tokens.
