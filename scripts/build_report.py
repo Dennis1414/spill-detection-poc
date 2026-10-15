@@ -28,6 +28,7 @@ THUMB = 640
 NOT_A_FLOOR = [
     "istockphoto-1409100095", "output_35_flipped_horizontal", "output_100_flipped_horizontal",
     "output_86_black_and_white", "output_87_flipped_vertical", "output_87_black_and_white",
+    "output_0_black_and_white", "output_5_flipped_horizontal",
 ]
 
 # (filename prefix, group, short caption). Groups: detected / clear / scope / hard
@@ -38,8 +39,15 @@ SHOWCASE = [
     ("Screenshot-2023", "detected", "Small water patch on a wooden floor, screenshot from video"),
     ("WhatsApp-Video", "detected", "Muddy splash across a tiled floor, WhatsApp video frame"),
     ("download-12-", "detected", "Tipped glass with water spreading on a grey surface"),
+    ("istockphoto-1306345532", "detected", "Water droplets and a wet patch on a dark wooden floor"),
+    ("istockphoto-1204491935", "detected", "Red liquid splashed on white tiles"),
+    ("output_1_flipped_vertical", "detected", "Orange drink soaked into carpet, hands reaching in"),
+    ("images-41-", "detected", "Juice pooled on a tiled floor"),
     ("images-24-_jpeg.rf.e5a57", "hard", "Clear water from a tipped glass on wood grain. Opus caught it, Haiku called it a reflection"),
-    ("images-52-", "hard", "Tea spill next to a cup. Flagged at low confidence (0.60), which the robot should treat as 'go check'"),
+    ("images-52-_jpeg.rf.1aec", "hard", "Tea spill next to a cup. Flagged at low confidence (0.60), which the robot should treat as 'go check'"),
+    ("istockphoto-1251463928", "hard", "Small clear puddle on a pale floor, almost invisible at a glance"),
+    ("w9_jpeg", "clear", "Supermarket CCTV frame, shoppers in an aisle, dry floor"),
+    ("173_jpg", "clear", "Bright supermarket aisle, polished floor, no spill"),
     ("video4-062", "clear", "Person lying on a tiled floor between chairs, no liquid"),
     ("video2-010", "clear", "Same room, different angle. Scuffed tiles, no spill"),
     ("0B11J4CA9RPZ", "clear", "Very dark, grainy frame of a shopping trolley"),
@@ -112,7 +120,9 @@ def floor_only(summary: dict, rows: dict[str, dict]) -> dict:
         elif not gt and pred: fp += 1
         else: tn += 1
     n = tp + fp + tn + fn
-    return {"n": n, "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+    nf = [r for name, r in rows.items() if any(name.startswith(p) for p in NOT_A_FLOOR) and not r.get("error")]
+    rule_ok = sum(1 for r in nf if not r["result"]["spill_detected"])
+    return {"n": n, "tp": tp, "fp": fp, "tn": tn, "fn": fn, "non_floor": len(nf), "rule_ok": rule_ok,
             "accuracy": (tp + tn) / n if n else 0,
             "recall": tp / (tp + fn) if tp + fn else 0,
             "precision": tp / (tp + fp) if tp + fp else 0}
@@ -200,8 +210,8 @@ def main() -> None:
 <tr><th>Floor-frame accuracy</th><td>{pct(fo['accuracy'])}</td><td>{pct(fh['accuracy'])}</td></tr>
 <tr><th>Floor spills missed</th><td>{fo['fn']} of {fo['tp'] + fo['fn']}</td><td>{fh['fn']} of {fh['tp'] + fh['fn']}</td></tr>
 <tr><th>False alarms</th><td>{fo['fp']} of {fo['tn'] + fo['fp']}</td><td>{fh['fp']} of {fh['tn'] + fh['fp']}</td></tr>
-<tr><th>Followed the floor-only rule</th><td>6 of 6</td><td>3 of 6</td></tr>
-<tr><th>Cost, 100 frames</th><td>${run['est_cost_usd']:.2f}</td><td>${hr['est_cost_usd']:.3f}</td></tr>
+<tr><th>Followed the floor-only rule</th><td>{fo['rule_ok']} of {fo['non_floor']}</td><td>{fh['rule_ok']} of {fh['non_floor']}</td></tr>
+<tr><th>Cost, {len(opus)} frames</th><td>${cost_per * len(opus):.2f}</td><td>${hr['est_cost_usd'] / hr['images'] * len(haiku):.3f}</td></tr>
 <tr><th>Mean latency</th><td>{lat:.1f} s</td><td>{hlat:.1f} s</td></tr>"""
 
     # Appendix: every evaluated frame, spills first, then by confidence
@@ -333,7 +343,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   <div class="tiles">
     <div class="tile"><div class="big">{pct(fo['accuracy'])}</div><div class="label">correct on floor frames</div><div class="src">{fo['n']} labelled frames, public dataset</div></div>
     <div class="tile"><div class="big">{fo['fp']}</div><div class="label">false alarms</div><div class="src">out of {fo['tn'] + fo['fp']} frames with no spill</div></div>
-    <div class="tile"><div class="big">${cost_per:.3f}</div><div class="label">per frame</div><div class="src">measured, {run['images']} frames, ${run['est_cost_usd']:.2f} total</div></div>
+    <div class="tile"><div class="big">${cost_per:.3f}</div><div class="label">per frame</div><div class="src">measured, {len(opus)} frames, about ${cost_per * len(opus):.2f} total</div></div>
     <div class="tile"><div class="big">{lat:.1f}s</div><div class="label">per frame</div><div class="src">mean round trip, 6 frames in flight</div></div>
   </div>
 </header>
@@ -374,15 +384,15 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   <div class="prose">
     <p class="eyebrow">Evaluation</p>
     <h2 style="margin-top:6px">Numbers behind the headline</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">100 frames drawn at random from the validation split of the public Spill_Detection dataset (Roboflow, CC BY 4.0). The dataset labels any visible liquid as "water", including coffee on a laptop or water on a sofa. Six of the 100 were like that. The model refused to call them floor spills, which is the behaviour we want, so they are reported separately rather than counted as misses.</p>
+    <p style="margin-top:10px;color:var(--fg-2)">{len(opus)} frames drawn at random from the validation split of the public Spill_Detection dataset (Roboflow, CC BY 4.0). The dataset labels any visible liquid as "water", including coffee on a laptop, water on a sofa or juice on a table. {fo['non_floor']} of the {len(opus)} were like that, checked by eye. The model refused to call them floor spills, which is the behaviour we want, so they are reported separately rather than counted as misses.</p>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th></th><th>All 100 frames, raw labels</th><th>Floor frames only ({fo['n']})</th></tr></thead>
+    <thead><tr><th></th><th>All {len(opus)} frames, raw labels</th><th>Floor frames only ({fo['n']})</th></tr></thead>
     <tbody>
       <tr><th>Accuracy</th><td>{pct(opus_sum['accuracy'])}</td><td class="hi">{pct(fo['accuracy'])}</td></tr>
       <tr><th>Spills found</th><td>{conf['tp']} of {conf['tp'] + conf['fn']}</td><td class="hi">{fo['tp']} of {fo['tp'] + fo['fn']}</td></tr>
       <tr><th>False alarms</th><td>{conf['fp']} of {conf['tn'] + conf['fp']}</td><td class="hi">{fo['fp']} of {fo['tn'] + fo['fp']}</td></tr>
-      <tr><th>Non-floor liquids labelled "water"</th><td>6, counted as misses</td><td>excluded</td></tr>
+      <tr><th>Non-floor liquids labelled "water"</th><td>{fo['non_floor']}, counted as misses</td><td>excluded</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
@@ -394,7 +404,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   <div class="prose">
     <p class="eyebrow">Model choice</p>
     <h2 style="margin-top:6px">Why Opus 5.5 and not the cheaper model</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">Claude Haiku 5.5 costs about a thirtieth as much. On the same 100 frames its headline score is slightly higher, but for the wrong reasons: it ignored the floor-only rule on three of the six mislabelled frames, and it missed the one genuinely hard floor spill in the set.</p>
+    <p style="margin-top:10px;color:var(--fg-2)">Claude Haiku 5.5 costs about a thirtieth as much. On the same {len(opus)} frames its headline score is close, but it is less consistent: it ignored the floor-only rule on {fh['non_floor'] - fh['rule_ok']} of the {fh['non_floor']} mislabelled frames, gave up on several abstract splash images, and missed the one genuinely hard floor spill in the set.</p>
   </div>
   {compare}
   <div class="tablewrap"><table>
@@ -447,7 +457,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <footer>
   <div>Model: claude-opus-5-5, effort low, structured JSON output. Frames resized to at most 1.15 megapixels before upload.</div>
-  <div>Data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, 100 frames, random seed 0.</div>
+  <div>Data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, {len(opus)} frames, random seed 0.</div>
   <div>Report generated from data/results by scripts/build_report.py.</div>
 </footer>
 </div>
