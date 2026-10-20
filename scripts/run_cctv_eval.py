@@ -42,17 +42,22 @@ def main() -> None:
     ap.add_argument("--model", default=MODEL_ID)
     ap.add_argument("--effort", default="low")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--stride", type=int, default=1, help="take every k-th pair (cheaper comparison runs)")
     ap.add_argument("--max-candidates", type=int, default=8)
     ap.add_argument("--no-persistence", action="store_true", help="ignore the 'later' frame (no persistence filter)")
+    ap.add_argument("--three-frames", action="store_true",
+                    help="also send the 'later' frame to the model so it can see shadows and objects move")
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     pairs = [json.loads(l) for l in Path(args.pairs).read_text(encoding="utf-8").splitlines() if l.strip()]
+    if args.stride > 1:
+        pairs = pairs[:: args.stride]
     if args.limit:
         pairs = pairs[: args.limit]
     out = Path(args.out or f"data/results/cctv_{args.mode}" + ("_nopersist" if args.no_persistence else "")
-               + ("" if args.model == MODEL_ID else f"_{args.model}"))
+               + ("_3f" if args.three_frames else "") + ("" if args.model == MODEL_ID else f"_{args.model}"))
     out.mkdir(parents=True, exist_ok=True)
     jsonl = out / "results.jsonl"
     done = {}
@@ -84,8 +89,9 @@ def main() -> None:
                 rec["latency_s"] = round(time.perf_counter() - t0, 2)
                 return rec
         best = None
+        later_path = p.get("later") if (args.three_frames and p.get("later")) else None
         for crop in crops:
-            d = det.classify_pair(p["ref"], p["cur"], crop=crop)
+            d = det.classify_pair(p["ref"], p["cur"], crop=crop, later_path=later_path)
             if d.error:
                 rec["calls"].append({"crop": crop, "error": d.error})
                 rec["error"] = d.error

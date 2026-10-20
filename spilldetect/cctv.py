@@ -40,7 +40,8 @@ def propose_candidates(
     min_area_frac: float = 0.0006,
     pad_frac: float = 0.25,
     min_crop_frac: float = 0.18,
-    max_candidates: int = 8,
+    max_candidates: int = 12,
+    merge_max_area: float = 0.3,
 ) -> list[Box]:
     """Return normalised (x, y, w, h) crop boxes around changed regions, largest first.
 
@@ -53,32 +54,63 @@ def propose_candidates(
     """
     H, W = current.shape[:2]
     mask = change_mask(reference, current, threshold)
+    persistent = moving = None
     if later is not None:
-        persistent = change_mask(reference, later, threshold)
+        persistent = change_mask(reference, later, threshold)   # still different from the empty floor later
+        moving = change_mask(current, later, threshold)         # changed between now and later (walkers, escalators)
         mask = cv2.bitwise_and(mask, cv2.dilate(persistent, np.ones((15, 15), np.uint8)))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     boxes: list[tuple[int, int, int, int]] = []
+    scores: list[float] = []
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
         if w * h < min_area_frac * W * H:
             continue
         boxes.append((x, y, w, h))
-    boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
+        if persistent is not None:
+            # a spill is still there later AND looks the same later; a walker is gone, an
+            # escalator or a standing-then-moving person keeps changing. Score in [0, 1].
+            p = float(persistent[y:y + h, x:x + w].mean()) / 255.0
+            s = 1.0 - float(moving[y:y + h, x:x + w].mean()) / 255.0
+            scores.append(p * s)
+        else:
+            scores.append(float(w * h))
+    # most spill-like first (ties by area), so a small spill is not crowded out by people
+    order = sorted(range(len(boxes)), key=lambda i: (-scores[i], -boxes[i][2] * boxes[i][3]))
+    boxes = [boxes[i] for i in order]
 
-    out: list[Box] = []
-    for x, y, w, h in boxes[: max_candidates * 2]:
+    padded: list[Box] = []
+    for x, y, w, h in boxes[: max_candidates * 4]:
         px, py = int(w * pad_frac), int(h * pad_frac)
         side_w = max(w + 2 * px, int(min_crop_frac * W))
         side_h = max(h + 2 * py, int(min_crop_frac * H))
         cx, cy = x + w / 2, y + h / 2
         nx = max(0.0, min(1 - side_w / W, (cx - side_w / 2) / W))
         ny = max(0.0, min(1 - side_h / H, (cy - side_h / 2) / H))
-        box = (nx, ny, min(1.0, side_w / W), min(1.0, side_h / H))
-        if not any(_iou(box, o) > 0.5 for o in out):
+        padded.append((nx, ny, min(1.0, side_w / W), min(1.0, side_h / H)))
+
+    # Merge neighbours into one crop while the union stays small enough to keep detail:
+    # several standing people near a spill then cost one call instead of four.
+    out: list[Box] = []
+    for box in padded:
+        merged = False
+        for i, o in enumerate(out):
+            u = _union(box, o)
+            if _iou(box, o) > 0.5 or (u[2] * u[3] <= merge_max_area and _iou(box, o) > 0.0):
+                out[i] = u
+                merged = True
+                break
+        if not merged:
             out.append(box)
         if len(out) >= max_candidates:
             break
     return out
+
+
+def _union(a: Box, b: Box) -> Box:
+    x0, y0 = min(a[0], b[0]), min(a[1], b[1])
+    x1, y1 = max(a[0] + a[2], b[0] + b[2]), max(a[1] + a[3], b[1] + b[3])
+    return (x0, y0, x1 - x0, y1 - y0)
 
 
 def _iou(a: Box, b: Box) -> float:

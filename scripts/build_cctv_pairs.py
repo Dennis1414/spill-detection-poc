@@ -80,7 +80,8 @@ def sequences() -> dict[str, list[Path]]:
     return out
 
 
-def floor_point(ref, cur, rng: random.Random, width_frac: float = 0.1) -> tuple[float, float]:
+def floor_point(ref, cur, rng: random.Random, width_frac: float = 0.1,
+                max_sat: float = 70, max_edge: float = 0.08) -> tuple[float, float]:
     """Pick a spot in the lower part of the frame that looks like open floor.
 
     Open floor: unchanged between ref and cur, not a letterbox border, some texture,
@@ -101,10 +102,10 @@ def floor_point(ref, cur, rng: random.Random, width_frac: float = 0.1) -> tuple[
         patch = grey[sl]
         if patch.size == 0 or moved[sl].mean() > 6 or not (40 < patch.mean() < 225) or patch.std() < 4:
             continue
-        if sat[sl].mean() > 70:  # grass, carpets, painted surfaces: not the stone/tile floor we want
+        if sat[sl].mean() > max_sat:  # grass, carpets, painted surfaces: not the stone/tile floor we want
             continue
         edge_density = edges[sl].mean() / 255
-        if edge_density > 0.08:
+        if edge_density > max_edge:
             continue
         score = edge_density * 10 + abs(y - 0.75) + rng.uniform(0, 0.6)  # smooth, lowish, with variety
         if score < best_score:

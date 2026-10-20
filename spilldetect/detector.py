@@ -62,10 +62,15 @@ same region. Decide whether a liquid spill has APPEARED on the floor in the curr
 reference. Anything already present in the reference (floor pattern, stains, reflections, fixed shadows,
 signage, furniture) is not a spill. People, trolleys, bags and their moving shadows are changes but not spills.
 A spill is a new patch on the floor with liquid characteristics: wet sheen, darkening, drips, splash shape.
-bbox refers to the CURRENT frame (fractions of the image you were given)."""
+bbox refers to the CURRENT frame (fractions of the image you were given).
+When a third image is given it is the same camera a few seconds AFTER the current frame: a spill is still
+there and unchanged in it, while a person's shadow, a trolley or a dropped-then-picked-up item has moved or gone."""
 
 PAIR_USER_PROMPT = ("The first image is the clean reference frame, the second is the current frame from the "
                     "same camera. Has a liquid spill appeared on the floor? Answer in the required JSON format.")
+TRIPLE_USER_PROMPT = ("The first image is the clean reference frame, the second is the current frame, the third is "
+                      "the same camera a few seconds later. Has a liquid spill appeared on the floor in the current "
+                      "frame? Use the third image to rule out shadows and moving objects. Answer in the required JSON format.")
 
 SpillType = Literal["water", "oil", "food_or_drink", "other_liquid", "unknown", "none"]
 SizeType = Literal["small", "medium", "large", "none"]
@@ -177,8 +182,9 @@ class SpillDetector:
         reference_path: str | Path,
         current_path: str | Path,
         crop: tuple[float, float, float, float] | None = None,
+        later_path: str | Path | None = None,
     ) -> Detection:
-        """Fixed-camera mode: clean reference frame + current frame, same camera, optional shared crop."""
+        """Fixed-camera mode: clean reference + current frame (+ optional frame a few seconds later), same crop."""
         ref, mt1, _ = encode_image(reference_path, crop)
         cur, mt2, size = encode_image(current_path, crop)
         content = [
@@ -186,8 +192,16 @@ class SpillDetector:
             {"type": "image", "source": {"type": "base64", "media_type": mt1, "data": ref}},
             {"type": "text", "text": "Current frame:"},
             {"type": "image", "source": {"type": "base64", "media_type": mt2, "data": cur}},
-            {"type": "text", "text": PAIR_USER_PROMPT},
         ]
+        if later_path is not None:
+            lat, mt3, _ = encode_image(later_path, crop)
+            content += [
+                {"type": "text", "text": "Same camera a few seconds later:"},
+                {"type": "image", "source": {"type": "base64", "media_type": mt3, "data": lat}},
+                {"type": "text", "text": TRIPLE_USER_PROMPT},
+            ]
+        else:
+            content.append({"type": "text", "text": PAIR_USER_PROMPT})
         return self._ask(str(current_path), SYSTEM_PROMPT + PAIR_SYSTEM_ADDENDUM, content, size)
 
     def _ask(self, path: str, system: str, content: list, size: tuple[int, int]) -> Detection:

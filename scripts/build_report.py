@@ -328,6 +328,19 @@ def main() -> None:
         f_lat = sum(r["latency_s"] for r in frows) / len(frows) if frows else 0
         fcf = fs["confusion"] if fs else {"tp": 0, "fn": 0, "fp": 0, "tn": 0}
         ccf = cs["confusion"]
+        cam_names = {"walkway_vert": "Mall walkway, vertical phone mount", "corridor_vert": "Covered corridor, vertical",
+                     "atrium_escalators": "Atrium with escalators, elevated", "atrium_4k": "Multi-level atrium, 4K, elevated",
+                     "plaza_overhead": "Plaza, overhead", "walkway": "Campus walkway (OpenCV)", "mallcorridor": "CAVIAR corridor"}
+        per_camera_rows = ""
+        for s in seqs:
+            sp = [r for r in cpos if r["seq"] == s]
+            sn = [r for r in cneg if r["seq"] == s]
+            res = next((r.get("res") for r in crows if r["seq"] == s and r.get("res")), None)
+            found = [r for r in sp if r["pred"]]
+            smallest = min((r["spill_width_frac"] for r in found), default=None)
+            per_camera_rows += (f"<tr><th>{html.escape(cam_names.get(s, s))}</th><td>{res[0]}&times;{res[1] if res else ''}</td>"
+                                f"<td>{len(found)} of {len(sp)}</td><td>{sum(1 for r in sn if r['pred'])} of {len(sn)}</td>"
+                                f"<td>{f'{smallest*100:.0f}% of frame width' if smallest else '&mdash;'}</td></tr>")
         cctv_section = f"""
 <section id="fixed-camera">
   <div class="prose">
@@ -341,7 +354,7 @@ def main() -> None:
     <div class="step"><div class="n">3 &middot; Ask about the patch</div><h3>Before and after, cropped</h3><p>Claude sees the reference crop and the current crop side by side and answers "has a liquid spill appeared on the floor?" with the same JSON as before. Boxes come back in frame coordinates.</p></div>
   </div>
   <div class="tiles">
-    <div class="tile"><div class="big">{pct(cs['recall'])}</div><div class="label">spills found</div><div class="src">{ccf['tp']} of {ccf['tp'] + ccf['fn']} synthetic spills on real floors</div></div>
+    <div class="tile"><div class="big">{pct(cs['recall'])}</div><div class="label">spills found</div><div class="src">{ccf['tp']} of {ccf['tp'] + ccf['fn']} rendered spills on real mall floors, {len(seqs)} cameras</div></div>
     <div class="tile"><div class="big">{ccf['fp']}</div><div class="label">false alarms</div><div class="src">out of {ccf['tn'] + ccf['fp']} real frames with people moving</div></div>
     <div class="tile"><div class="big">{cs['spill_located_correctly'].split(' of ')[0]}/{cs['spill_located_correctly'].split(' of ')[1]}</div><div class="label">placed at the right spot</div><div class="src">of the spills it found</div></div>
     <div class="tile"><div class="big">{calls_per:.1f}</div><div class="label">model calls per frame</div><div class="src">about ${c_cost_pair:.3f} per checked frame</div></div>
@@ -362,8 +375,12 @@ def main() -> None:
     </tbody>
   </table></div>
   <div class="prose">
-    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of two public fixed-camera clips, a shopping-centre corridor from the CAVIAR project (CC BY-SA) and a walkway from the OpenCV samples, with the floor darkening, tinting and reflecting the way wet stone does. Every negative is untouched footage of people walking through. The corridor clip is 384 by 288 pixels, far below a modern camera, and the model says so in several of its answers. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm. Of the {ccf['fn']} misses, {sum(1 for r in cpos if not r['pred'] and r['kind'] == 'milk')} are the rendered milk, a pale wash the model reads as glare, and the rest are under 6% of the frame width on the low-resolution corridor.</p>
+    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls, 1080p to 4K, from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
   </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Camera</th><th>Resolution</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
+    <tbody>{per_camera_rows}</tbody>
+  </table></div>
 </section>"""
 
     sample_json = json.dumps(find(opus, "333_mp4-11")["result"], indent=2) if find(opus, "333_mp4-11") else "{}"
@@ -592,7 +609,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
     <h2 style="margin-top:6px">Roadmap</h2>
   </div>
   <div class="road">
-    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on two public CCTV clips with rendered spills: zero false alarms on real footage.</div></div>
+    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on five modern mall cameras (1080p to 4K) with rendered spills: zero false alarms on real footage.</div></div>
     <div class="now"><div class="when">Next</div><div><strong>One real mall camera, real spills.</strong> A few hours of footage from a single camera in any mall, with water, coffee and oil spilled on the floor in view. This replaces the synthetic positives and gives the true recall number.</div></div>
     <div><div class="when">Then</div><div><strong>Hard negatives at scale.</strong> Polished stone, reflections, cleaning carts, wet-floor signs, dropped bags. Measure the false-alarm rate per camera per day, which is what decides whether staff trust the alerts.</div></div>
     <div><div class="when">Later</div><div><strong>Camera-server deployment.</strong> Reference and persistence run on the camera server at no cost; only persistent patches go to the model. Robot dispatch on confirmed spills. An on-device model trained from the accumulated labels where the cloud call is not wanted.</div></div>

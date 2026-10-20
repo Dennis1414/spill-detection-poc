@@ -125,20 +125,22 @@ The client may use the mall's existing CCTV instead of a robot camera. The pipel
    two-image mode (`SpillDetector.classify_pair`): "has a liquid spill appeared on the floor?"
 4. A frame with no persistent change costs nothing.
 
-Evaluation data: two public fixed-camera clips in `data/raw/cctv/` (OpenCV `vtest.avi`, a walkway;
-CAVIAR `OneShopOneWait1cor.mpg`, a shopping-centre corridor, CC BY-SA) with synthetic spills composited
-onto the real floor (`spilldetect/synth.py`), so every positive has an exact box and every negative
-is real footage of people moving.
+Evaluation data: fixed-view mall clips in `data/raw/cctv/mall/` (Pixabay and Pexels stock footage,
+1080p to 4K, licences allow commercial use) with synthetic spills composited onto the real floor
+(`spilldetect/synth.py`), so every positive has an exact box and every negative is real footage of
+people moving. Two older low-resolution clips (OpenCV `vtest.avi`, CAVIAR corridor) are kept in
+`data/raw/cctv/` for reference. Every frame is registered to the clip's first frame (ORB + homography),
+and clips whose camera really moves are rejected.
 
 ```bash
-python scripts/build_cctv_pairs_video.py data/raw/cctv/vtest.avi --name walkway --pairs 30 --floor-poly "..."
-python scripts/build_cctv_pairs_video.py data/raw/cctv/OneShopOneWait1cor.mpg --name mallcorridor --pairs 30 --floor-poly "..."
-python scripts/run_cctv_eval.py --mode crops      # the real pipeline
-python scripts/run_cctv_eval.py --mode full       # whole frame, no candidate step, for comparison
+python scripts/build_cctv_pairs_video.py clip.mp4 --name atrium --dry-run         # reference + drift + gridded image
+python scripts/build_cctv_pairs_video.py clip.mp4 --name atrium --pairs 60 --floor-poly "x,y x,y ..."
+python scripts/run_cctv_eval.py --mode crops                # the real pipeline
+python scripts/run_cctv_eval.py --mode full --stride 3      # whole frame, no candidate step, for comparison
 ```
 
-The `--floor-poly` is the floor zone in frame fractions; in a real install the integrator draws it once per camera.
-Results land in `data/results/cctv_crops/` and `cctv_full/`.
+The `--floor-poly` is the floor zone in frame fractions, traced from the gridded reference; in a real install
+the integrator draws it once per camera. Results land in `data/results/cctv_crops/` and `cctv_full/`.
 
 ## Cost
 
