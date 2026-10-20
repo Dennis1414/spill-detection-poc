@@ -135,7 +135,7 @@ and clips whose camera really moves are rejected.
 ```bash
 python scripts/build_cctv_pairs_video.py clip.mp4 --name atrium --dry-run         # reference + drift + gridded image
 python scripts/build_cctv_pairs_video.py clip.mp4 --name atrium --pairs 60 --floor-poly "x,y x,y ..."
-python scripts/run_cctv_eval.py --mode crops                # the real pipeline
+python scripts/run_cctv_eval.py --mode crops --three-frames # the real pipeline (reference, now, 2 s later)
 python scripts/run_cctv_eval.py --mode full --stride 3      # whole frame, no candidate step, for comparison
 ```
 

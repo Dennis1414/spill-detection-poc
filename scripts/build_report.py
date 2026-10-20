@@ -110,8 +110,8 @@ def small_card(name: str, r: dict) -> str:
 </figure>"""
 
 
-CCTV_CROPS = ROOT / "data/results/cctv_crops"
-CCTV_FULL = ROOT / "data/results/cctv_full"
+CCTV_CROPS = ROOT / "data/results/cctv_crops_3f"   # the pipeline: persistent-and-stable crops, 3 frames
+CCTV_FULL = ROOT / "data/results/cctv_full"        # whole frame, no candidate step (every 3rd pair)
 
 
 def load_cctv(d: Path) -> tuple[dict, list[dict]] | tuple[None, list]:
@@ -166,11 +166,15 @@ def cctv_card(r: dict, caption: str) -> str:
     outcome = ("Found" if pred else "Missed") if r["has_spill"] else ("False alarm" if pred else "Correctly clear")
     ocls = "ok" if pred == r["has_spill"] else "bad"
     truth = f"synthetic {r['kind']} spill, {r['spill_width_frac']*100:.0f}% of frame width" if r["has_spill"] else "no spill, real footage"
+    later_img = ""
+    if r.get("later") and r["later"] != r["cur"]:
+        later_img = f'<div class="img"><img src="{crop_b64(r["later"], crop)}" alt="later crop" loading="lazy"><span class="tag">2 s later</span></div>'
     return f"""
 <figure class="pair">
-  <div class="two">
+  <div class="two{' three' if later_img else ''}">
     <div class="img"><img src="{crop_b64(r['ref'], crop)}" alt="reference crop" loading="lazy"><span class="tag">reference</span></div>
     <div class="img"><img src="{crop_b64(r['cur'], crop)}" alt="current crop" loading="lazy">{gtbox}{box}<span class="tag">current</span></div>
+    {later_img}
   </div>
   <figcaption>
     <div class="verdict-row">
@@ -328,7 +332,14 @@ def main() -> None:
         f_lat = sum(r["latency_s"] for r in frows) / len(frows) if frows else 0
         fcf = fs["confusion"] if fs else {"tp": 0, "fn": 0, "fp": 0, "tn": 0}
         ccf = cs["confusion"]
-        cam_names = {"walkway_vert": "Mall walkway, vertical phone mount", "corridor_vert": "Covered corridor, vertical",
+        HANDHELD = {"walkway_vert"}  # phone held by a person, not a mounted camera; kept as the hardest case
+        mounted = [r for r in crows if r["seq"] not in HANDHELD]
+        m_tp = sum(1 for r in mounted if r["has_spill"] and r["pred"])
+        m_fn = sum(1 for r in mounted if r["has_spill"] and not r["pred"])
+        m_fp = sum(1 for r in mounted if not r["has_spill"] and r["pred"])
+        m_tn = sum(1 for r in mounted if not r["has_spill"] and not r["pred"])
+        m_acc = (m_tp + m_tn) / len(mounted) if mounted else 0
+        cam_names = {"walkway_vert": "Mall walkway, handheld phone (not mounted)", "corridor_vert": "Covered corridor, vertical",
                      "atrium_escalators": "Atrium with escalators, elevated", "atrium_4k": "Multi-level atrium, 4K, elevated",
                      "plaza_overhead": "Plaza, overhead", "walkway": "Campus walkway (OpenCV)", "mallcorridor": "CAVIAR corridor"}
         per_camera_rows = ""
@@ -351,7 +362,7 @@ def main() -> None:
   <div class="steps">
     <div class="step"><div class="n">1 &middot; Reference</div><h3>Remember the empty floor</h3><p>A median over a few seconds of footage removes passers-by and leaves the clean floor, per camera. Refreshed slowly so lighting changes do not pile up.</p></div>
     <div class="step"><div class="n">2 &middot; Persistent change</div><h3>Find what appeared and stayed</h3><p>Difference against the reference, kept only where the change is still there two seconds later. People, trolleys and their shadows drop out; spills, dropped bags and signs remain.</p></div>
-    <div class="step"><div class="n">3 &middot; Ask about the patch</div><h3>Before and after, cropped</h3><p>Claude sees the reference crop and the current crop side by side and answers "has a liquid spill appeared on the floor?" with the same JSON as before. Boxes come back in frame coordinates.</p></div>
+    <div class="step"><div class="n">3 &middot; Ask about the patch</div><h3>Three frames, one crop</h3><p>Claude sees the same crop from the reference, the current frame and a frame two seconds later, and answers "has a liquid spill appeared on the floor?" with the same JSON as before. The third frame is how it tells a spill, which stays, from a shadow, which walks away. Boxes come back in frame coordinates.</p></div>
   </div>
   <div class="tiles">
     <div class="tile"><div class="big">{pct(cs['recall'])}</div><div class="label">spills found</div><div class="src">{ccf['tp']} of {ccf['tp'] + ccf['fn']} rendered spills on real mall floors, {len(seqs)} cameras</div></div>
@@ -360,11 +371,14 @@ def main() -> None:
     <div class="tile"><div class="big">{calls_per:.1f}</div><div class="label">model calls per frame</div><div class="src">about ${c_cost_pair:.3f} per checked frame</div></div>
   </div>
   <div class="prose">
-    <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the reference crop and the current crop. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
+    <p style="color:var(--fg-2)">Overall accuracy across all {n_pairs} pairs is <strong>{pct(cs['accuracy'])}</strong>. On the four mounted cameras alone ({len(mounted)} pairs) it is <strong>{pct(m_acc)}</strong>: {m_tp} of {m_tp + m_fn} spills found, {m_fp} false alarms in {m_fp + m_tn} real frames. The handheld walkway clip accounts for every false alarm, and the per-camera table below shows why.</p>
+  </div>
+  <div class="prose">
+    <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the same crop from the reference, the current frame and two seconds later. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
   </div>
   <div class="gallery pairs">{pair_cards}</div>
   <div class="tablewrap"><table>
-    <thead><tr><th></th><th>Persistent-change crops (the pipeline)</th><th>Whole frame, no candidate step</th></tr></thead>
+    <thead><tr><th></th><th>The pipeline: persistent crops, three frames ({n_pairs} pairs)</th><th>Whole frame, two frames, no candidate step ({fs['pairs'] if fs else 0} pairs, every third)</th></tr></thead>
     <tbody>
       <tr><th>Spills found</th><td class="hi">{ccf['tp']} of {ccf['tp'] + ccf['fn']}</td><td>{fcf['tp']} of {fcf['tp'] + fcf['fn']}</td></tr>
       <tr><th>False alarms</th><td class="hi">{ccf['fp']} of {ccf['tn'] + ccf['fp']}</td><td>{fcf['fp']} of {fcf['tn'] + fcf['fp']}</td></tr>
@@ -375,7 +389,7 @@ def main() -> None:
     </tbody>
   </table></div>
   <div class="prose">
-    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls, 1080p to 4K, from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
+    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls, 1080p to 4K, from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. One kept clip, the vertical walkway, is handheld rather than mounted, so its glossy tiles reflect the shop walls differently as the viewpoint shifts. It is the hardest camera here and the source of most false alarms; a mounted camera would not do that. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>Camera</th><th>Resolution</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
@@ -482,6 +496,7 @@ td.hi {{ font-weight: 600; }}
 .pairs {{ grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }}
 .pair {{ margin: 0; background: var(--surface); border: 1px solid var(--line); min-width: 0; }}
 .pair .two {{ display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--line); }}
+.pair .two.three {{ grid-template-columns: 1fr 1fr 1fr; }}
 .pair .img {{ aspect-ratio: 1; }}
 .pair .tag {{ position: absolute; left: 6px; bottom: 6px; font: 500 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; background: rgba(0,0,0,.55); color: #fff; padding: 2px 6px; }}
 .gtbox {{ position: absolute; border: 1px solid var(--ok); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }}

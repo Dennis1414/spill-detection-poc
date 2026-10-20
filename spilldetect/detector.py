@@ -64,7 +64,12 @@ signage, furniture) is not a spill. People, trolleys, bags and their moving shad
 A spill is a new patch on the floor with liquid characteristics: wet sheen, darkening, drips, splash shape.
 bbox refers to the CURRENT frame (fractions of the image you were given).
 When a third image is given it is the same camera a few seconds AFTER the current frame: a spill is still
-there and unchanged in it, while a person's shadow, a trolley or a dropped-then-picked-up item has moved or gone."""
+there and unchanged in it, while a person's shadow, a trolley or a dropped-then-picked-up item has moved or gone.
+Two traps on glossy mall floors: (1) a dark patch that touches a person's feet or legs in any frame and matches
+their outline is their shadow, even if the person is only partly visible; (2) coloured streaks along the base of
+walls, shopfronts or signs are reflections of those surfaces in the polished floor, not liquid. Call a spill only
+when the patch is on open floor, has its own outline independent of any person, and is present in every frame
+after it appears."""
 
 PAIR_USER_PROMPT = ("The first image is the clean reference frame, the second is the current frame from the "
                     "same camera. Has a liquid spill appeared on the floor? Answer in the required JSON format.")
