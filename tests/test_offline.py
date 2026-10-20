@@ -115,6 +115,39 @@ def test_detector_handles_refusal_and_bad_json():
         assert SpillDetector(client=client).classify(p).error.startswith("bad output")
 
 
+def test_pair_mode_sends_two_images_and_crop_keeps_resolution():
+    payload = {"spill_detected": True, "confidence": 0.9, "spill_type": "water", "size": "small",
+               "bbox": [0.4, 0.4, 0.2, 0.2], "debris_present": False, "floor_visible": True, "reasoning": "x"}
+    client, m = _fake_client(json.dumps(payload))
+    with tempfile.TemporaryDirectory() as d:
+        ref, cur = Path(d) / "ref.jpg", Path(d) / "cur.jpg"
+        make_floor_image(ref, 1920, 1080, False)
+        make_floor_image(cur, 1920, 1080, True)
+        det = SpillDetector(client=client)
+        r = det.classify_pair(ref, cur, crop=(0.25, 0.25, 0.25, 0.25))
+    assert r.error is None and r.result.spill_detected
+    content = m.calls[0]["messages"][0]["content"]
+    assert sum(1 for b in content if b["type"] == "image") == 2
+    assert "Fixed-camera mode" in m.calls[0]["system"][0]["text"]
+    assert r.image_size == (480, 270)  # 25% crop of 1920x1080 kept at native resolution
+
+
+def test_candidate_finder_and_synth_spill():
+    from spilldetect.cctv import propose_candidates, box_to_frame
+    from spilldetect.synth import composite_spill
+    rng = np.random.default_rng(1)
+    ref = np.full((540, 960, 3), 190, np.uint8) + rng.integers(0, 6, (540, 960, 3), np.uint8)
+    cur, gt = composite_spill(ref, (0.3, 0.75), 0.08, "coffee", seed=3)
+    assert 0.05 < gt[2] < 0.2 and 0.6 < gt[1] < 0.9
+    cands = propose_candidates(ref, cur)
+    assert cands, "the composited spill should register as a change"
+    cx, cy = gt[0] + gt[2] / 2, gt[1] + gt[3] / 2
+    assert any(c[0] <= cx <= c[0] + c[2] and c[1] <= cy <= c[1] + c[3] for c in cands)
+    assert propose_candidates(ref, ref) == []
+    fb = box_to_frame([0.5, 0.5, 0.2, 0.2], (0.1, 0.2, 0.4, 0.4))
+    assert [round(v, 3) for v in fb] == [0.3, 0.4, 0.08, 0.08]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

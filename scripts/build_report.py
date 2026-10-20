@@ -13,11 +13,13 @@ import html
 import io
 import json
 import os
+import sys
 from pathlib import Path
 
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 OPUS_DIR = ROOT / "data/results/spill_detection_valid"
 HAIKU_DIR = ROOT / "data/results/spill_detection_valid_claude-haiku-5-5"
 OUT = ROOT / "report/index.html"
@@ -104,6 +106,80 @@ def small_card(name: str, r: dict) -> str:
     <span class="pill {'spill' if pred else 'clear'}">{'Spill' if pred else 'Clear'}</span>
     <span class="conf">{x['confidence']:.2f}</span>
     <span class="status {status_cls}">{status}</span>
+  </figcaption>
+</figure>"""
+
+
+CCTV_CROPS = ROOT / "data/results/cctv_crops"
+CCTV_FULL = ROOT / "data/results/cctv_full"
+
+
+def load_cctv(d: Path) -> tuple[dict, list[dict]] | tuple[None, list]:
+    if not (d / "summary.json").exists():
+        return None, []
+    summary = json.loads((d / "summary.json").read_text())
+    rows = [json.loads(l) for l in (d / "results.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    return summary, rows
+
+
+def crop_b64(path: str, crop, size: int = 420) -> str:
+    from spilldetect.images import load_resized
+    im = load_resized(path, tuple(crop) if crop else None)
+    im.thumbnail((size, size))
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "JPEG", quality=80, optimize=True)
+    return "data:image/jpeg;base64," + base64.standard_b64encode(buf.getvalue()).decode()
+
+
+def _contains(crop, pt) -> bool:
+    return crop[0] <= pt[0] <= crop[0] + crop[2] and crop[1] <= pt[1] <= crop[1] + crop[3]
+
+
+def cctv_card(r: dict, caption: str) -> str:
+    """Before/after card: the crop the model saw from the reference and the current frame."""
+    gt_c = None
+    if r["gt_bbox"]:
+        gt_c = (r["gt_bbox"][0] + r["gt_bbox"][2] / 2, r["gt_bbox"][1] + r["gt_bbox"][3] / 2)
+    calls = [c for c in r["calls"] if "spill" in c]
+    # the call to show: the positive one, else the one covering the spill, else the first
+    call = next((c for c in calls if c["spill"]), None)
+    if call is None and gt_c:
+        call = next((c for c in calls if c.get("crop") and _contains(c["crop"], gt_c)), None)
+    if call is None and calls:
+        call = calls[0]
+    crop = call["crop"] if call and call.get("crop") else [0, 0, 1, 1]
+    box = ""
+    if call and call.get("spill") and call.get("bbox_frame"):
+        bx, by, bw, bh = call["bbox_frame"]
+        cx, cy, cw, ch = crop
+        box = (f'<div class="box" style="left:{(bx-cx)/cw*100:.1f}%;top:{(by-cy)/ch*100:.1f}%;'
+               f'width:{bw/cw*100:.1f}%;height:{bh/ch*100:.1f}%"></div>')
+    gtbox = ""
+    if r["gt_bbox"]:
+        bx, by, bw, bh = r["gt_bbox"]
+        cx, cy, cw, ch = crop
+        gtbox = (f'<div class="gtbox" style="left:{(bx-cx)/cw*100:.1f}%;top:{(by-cy)/ch*100:.1f}%;'
+                 f'width:{bw/cw*100:.1f}%;height:{bh/ch*100:.1f}%"></div>')
+    pred = r["pred"]
+    conf = call["confidence"] if call else 0.0
+    reason = call["reasoning"] if call else r["reasoning"]
+    outcome = ("Found" if pred else "Missed") if r["has_spill"] else ("False alarm" if pred else "Correctly clear")
+    ocls = "ok" if pred == r["has_spill"] else "bad"
+    truth = f"synthetic {r['kind']} spill, {r['spill_width_frac']*100:.0f}% of frame width" if r["has_spill"] else "no spill, real footage"
+    return f"""
+<figure class="pair">
+  <div class="two">
+    <div class="img"><img src="{crop_b64(r['ref'], crop)}" alt="reference crop" loading="lazy"><span class="tag">reference</span></div>
+    <div class="img"><img src="{crop_b64(r['cur'], crop)}" alt="current crop" loading="lazy">{gtbox}{box}<span class="tag">current</span></div>
+  </div>
+  <figcaption>
+    <div class="verdict-row">
+      <span class="pill {'spill' if pred else 'clear'}">{'Spill' if pred else 'Clear'}</span>
+      <span class="conf">confidence {conf:.2f}</span>
+      <span class="status {ocls}" style="margin-left:auto">{outcome}</span>
+    </div>
+    <p class="reason">{html.escape(reason)}</p>
+    <p class="caption">{html.escape(caption)} &middot; truth: {html.escape(truth)}</p>
   </figcaption>
 </figure>"""
 
@@ -219,6 +295,77 @@ def main() -> None:
     appendix = "\n".join(small_card(n, r) for n, r in ordered if not r.get("error"))
     n_all = sum(1 for r in opus.values() if not r.get("error"))
 
+    # Fixed-camera section
+    cs, crows = load_cctv(CCTV_CROPS)
+    fs, frows = load_cctv(CCTV_FULL)
+    cctv_section = ""
+    if cs:
+        n_pairs = cs["pairs"]
+        cpos = [r for r in crows if r["has_spill"]]
+        cneg = [r for r in crows if not r["has_spill"]]
+        seqs = sorted({r["seq"] for r in crows})
+        tps = [r for r in cpos if r["pred"]]
+        misses = [r for r in cpos if not r["pred"]]
+        show = []
+        for s in seqs:  # four highest-confidence finds per camera, varied kinds
+            seen = set()
+            for r in sorted((t for t in tps if t["seq"] == s), key=lambda t: -t["confidence"]):
+                if r["kind"] in seen:
+                    continue
+                seen.add(r["kind"])
+                show.append((r, f"{s} camera"))
+                if len(seen) == 4:
+                    break
+        for r in misses[:2]:
+            show.append((r, f"{r['seq']} camera, a miss"))
+        for r in [n for n in cneg if n["candidates"] and n["calls"]][:2]:
+            show.append((r, f"{r['seq']} camera, people walking through"))
+        pair_cards = "\n".join(cctv_card(r, cap) for r, cap in show)
+        calls_per = cs["model_calls"] / n_pairs
+        c_cost_pair = cs["this_run"]["est_cost_usd"] / cs["this_run"]["pairs"] if cs["this_run"]["pairs"] else 0
+        f_cost_pair = fs["this_run"]["est_cost_usd"] / fs["this_run"]["pairs"] if fs and fs["this_run"]["pairs"] else 0
+        c_lat = sum(r["latency_s"] for r in crows) / len(crows)
+        f_lat = sum(r["latency_s"] for r in frows) / len(frows) if frows else 0
+        fcf = fs["confusion"] if fs else {"tp": 0, "fn": 0, "fp": 0, "tn": 0}
+        ccf = cs["confusion"]
+        cctv_section = f"""
+<section id="fixed-camera">
+  <div class="prose">
+    <p class="eyebrow">Fixed security cameras</p>
+    <h2 style="margin-top:6px">The same model on the mall's own cameras</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">If the cameras are fixed, the problem gets easier and cheaper. The server keeps a reference picture of each empty floor and only asks the model about patches that changed and <em>stayed</em> changed: a spill persists, a person walks on. Each such patch is cut out of both frames at full resolution and sent as a before-and-after pair. A frame with no persistent change costs nothing. The robot is dispatched only to a confirmed spill.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="n">1 &middot; Reference</div><h3>Remember the empty floor</h3><p>A median over a few seconds of footage removes passers-by and leaves the clean floor, per camera. Refreshed slowly so lighting changes do not pile up.</p></div>
+    <div class="step"><div class="n">2 &middot; Persistent change</div><h3>Find what appeared and stayed</h3><p>Difference against the reference, kept only where the change is still there two seconds later. People, trolleys and their shadows drop out; spills, dropped bags and signs remain.</p></div>
+    <div class="step"><div class="n">3 &middot; Ask about the patch</div><h3>Before and after, cropped</h3><p>Claude sees the reference crop and the current crop side by side and answers "has a liquid spill appeared on the floor?" with the same JSON as before. Boxes come back in frame coordinates.</p></div>
+  </div>
+  <div class="tiles">
+    <div class="tile"><div class="big">{pct(cs['recall'])}</div><div class="label">spills found</div><div class="src">{ccf['tp']} of {ccf['tp'] + ccf['fn']} synthetic spills on real floors</div></div>
+    <div class="tile"><div class="big">{ccf['fp']}</div><div class="label">false alarms</div><div class="src">out of {ccf['tn'] + ccf['fp']} real frames with people moving</div></div>
+    <div class="tile"><div class="big">{cs['spill_located_correctly'].split(' of ')[0]}/{cs['spill_located_correctly'].split(' of ')[1]}</div><div class="label">placed at the right spot</div><div class="src">of the spills it found</div></div>
+    <div class="tile"><div class="big">{calls_per:.1f}</div><div class="label">model calls per frame</div><div class="src">about ${c_cost_pair:.3f} per checked frame</div></div>
+  </div>
+  <div class="prose">
+    <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the reference crop and the current crop. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
+  </div>
+  <div class="gallery pairs">{pair_cards}</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>Persistent-change crops (the pipeline)</th><th>Whole frame, no candidate step</th></tr></thead>
+    <tbody>
+      <tr><th>Spills found</th><td class="hi">{ccf['tp']} of {ccf['tp'] + ccf['fn']}</td><td>{fcf['tp']} of {fcf['tp'] + fcf['fn']}</td></tr>
+      <tr><th>False alarms</th><td class="hi">{ccf['fp']} of {ccf['tn'] + ccf['fp']}</td><td>{fcf['fp']} of {fcf['tn'] + fcf['fp']}</td></tr>
+      <tr><th>Spills smaller than 7% of frame width found</th><td class="hi">{sum(1 for r in cpos if r['spill_width_frac'] < 0.07 and r['pred'])} of {sum(1 for r in cpos if r['spill_width_frac'] < 0.07)}</td><td>{sum(1 for r in frows if r['has_spill'] and r['spill_width_frac'] < 0.07 and r['pred'])} of {sum(1 for r in frows if r['has_spill'] and r['spill_width_frac'] < 0.07)}</td></tr>
+      <tr><th>Model calls per frame</th><td>{calls_per:.1f}</td><td>1</td></tr>
+      <tr><th>Cost per checked frame</th><td>${c_cost_pair:.3f}</td><td>${f_cost_pair:.3f}</td></tr>
+      <tr><th>Latency per frame</th><td>{c_lat:.1f} s</td><td>{f_lat:.1f} s</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of two public fixed-camera clips, a shopping-centre corridor from the CAVIAR project (CC BY-SA) and a walkway from the OpenCV samples, with the floor darkening, tinting and reflecting the way wet stone does. Every negative is untouched footage of people walking through. The corridor clip is 384 by 288 pixels, far below a modern camera, and the model says so in several of its answers. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm. Of the {ccf['fn']} misses, {sum(1 for r in cpos if not r['pred'] and r['kind'] == 'milk')} are the rendered milk, a pale wash the model reads as glare, and the rest are under 6% of the frame width on the low-resolution corridor.</p>
+  </div>
+</section>"""
+
     sample_json = json.dumps(find(opus, "333_mp4-11")["result"], indent=2) if find(opus, "333_mp4-11") else "{}"
 
     page = f"""<title>Spill Detection PoC</title>
@@ -315,6 +462,13 @@ td.hi {{ font-weight: 600; }}
 @media (max-width: 520px) {{ .road > div {{ grid-template-columns: 1fr; gap: 4px; }} }}
 .note {{ font-size: 14px; color: var(--fg-3); }}
 
+.pairs {{ grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }}
+.pair {{ margin: 0; background: var(--surface); border: 1px solid var(--line); min-width: 0; }}
+.pair .two {{ display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--line); }}
+.pair .img {{ aspect-ratio: 1; }}
+.pair .tag {{ position: absolute; left: 6px; bottom: 6px; font: 500 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; background: rgba(0,0,0,.55); color: #fff; padding: 2px 6px; }}
+.gtbox {{ position: absolute; border: 1px solid var(--ok); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }}
+.pair figcaption {{ padding: 12px 14px 14px; display: grid; gap: 8px; }}
 .all {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }}
 .small {{ margin: 0; background: var(--surface); border: 1px solid var(--line); min-width: 0; }}
 .small .img {{ aspect-ratio: 1; }}
@@ -338,7 +492,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 <header>
   <p class="eyebrow">Proof of concept &middot;Opus 5.5 vision &middot;15 October 2026</p>
   <h1 style="margin-top:10px">Spill detection for the cleaning robot</h1>
-  <p class="lede" style="margin-top:18px">A camera frame goes in, a yes/no verdict with a location comes out. No training data was collected and no model was trained. A general vision model reads each frame against a written description of what a floor spill is, and every answer it gives is stored as a label for the on-device model that comes next.</p>
+  <p class="lede" style="margin-top:18px">A camera frame goes in, a yes/no verdict with a location comes out. No training data was collected and no model was trained. A general vision model reads each frame against a written description of what a floor spill is, and every answer it gives is stored as a label for the on-device model that comes next. Tested two ways: single frames from a close camera, and before-and-after pairs from fixed security cameras, which is where the mall's existing CCTV comes in.</p>
 
   <div class="tiles">
     <div class="tile"><div class="big">{pct(fo['accuracy'])}</div><div class="label">correct on floor frames</div><div class="src">{fo['n']} labelled frames, public dataset</div></div>
@@ -400,6 +554,8 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   </div>
 </section>
 
+{cctv_section}
+
 <section>
   <div class="prose">
     <p class="eyebrow">Model choice</p>
@@ -436,10 +592,10 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
     <h2 style="margin-top:6px">Roadmap</h2>
   </div>
   <div class="road">
-    <div class="now"><div class="when">In progress</div><div><strong>Robot-height footage.</strong> Filming staged spills (water, oil, soy sauce) at 30 to 60 cm camera height on home floors, plus clean passes for hard negatives. Same pipeline, same report.</div></div>
-    <div><div class="when">Next</div><div><strong>Mall-floor hard negatives.</strong> Polished stone, reflections, dark tiles, wet-floor signs, shadows from trolleys. Measure the false-alarm rate where it actually matters.</div></div>
-    <div><div class="when">Then</div><div><strong>First robot run.</strong> Ten minutes of real robot camera video, driven past a few staged spills. Tune the brief on the errors.</div></div>
-    <div><div class="when">Later</div><div><strong>On-device model.</strong> Train a small detector from the accumulated labels and boxes so the robot runs offline at full frame rate, with the cloud model as a second opinion.</div></div>
+    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on two public CCTV clips with rendered spills: zero false alarms on real footage.</div></div>
+    <div class="now"><div class="when">Next</div><div><strong>One real mall camera, real spills.</strong> A few hours of footage from a single camera in any mall, with water, coffee and oil spilled on the floor in view. This replaces the synthetic positives and gives the true recall number.</div></div>
+    <div><div class="when">Then</div><div><strong>Hard negatives at scale.</strong> Polished stone, reflections, cleaning carts, wet-floor signs, dropped bags. Measure the false-alarm rate per camera per day, which is what decides whether staff trust the alerts.</div></div>
+    <div><div class="when">Later</div><div><strong>Camera-server deployment.</strong> Reference and persistence run on the camera server at no cost; only persistent patches go to the model. Robot dispatch on confirmed spills. An on-device model trained from the accumulated labels where the cloud call is not wanted.</div></div>
   </div>
 </section>
 

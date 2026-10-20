@@ -54,6 +54,19 @@ Rules:
 
 USER_PROMPT = "Analyse this floor camera frame for liquid spills and answer in the required JSON format."
 
+PAIR_SYSTEM_ADDENDUM = """
+
+Fixed-camera mode. You receive TWO images from the SAME fixed security camera: first the REFERENCE frame
+(the floor as it looked earlier, known to be clean) and second the CURRENT frame. Both may be a crop of the
+same region. Decide whether a liquid spill has APPEARED on the floor in the current frame that was not in the
+reference. Anything already present in the reference (floor pattern, stains, reflections, fixed shadows,
+signage, furniture) is not a spill. People, trolleys, bags and their moving shadows are changes but not spills.
+A spill is a new patch on the floor with liquid characteristics: wet sheen, darkening, drips, splash shape.
+bbox refers to the CURRENT frame (fractions of the image you were given)."""
+
+PAIR_USER_PROMPT = ("The first image is the clean reference frame, the second is the current frame from the "
+                    "same camera. Has a liquid spill appeared on the floor? Answer in the required JSON format.")
+
 SpillType = Literal["water", "oil", "food_or_drink", "other_liquid", "unknown", "none"]
 SizeType = Literal["small", "medium", "large", "none"]
 
@@ -150,8 +163,35 @@ class SpillDetector:
         self.client = client or anthropic.Anthropic(max_retries=max_retries)
         self.usage = Usage(model=model)
 
-    def classify(self, image_path: str | Path) -> Detection:
-        data, media_type, size = encode_image(image_path)
+    def classify(self, image_path: str | Path, crop: tuple[float, float, float, float] | None = None) -> Detection:
+        """Single-frame mode (robot camera)."""
+        data, media_type, size = encode_image(image_path, crop)
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
+            {"type": "text", "text": USER_PROMPT},
+        ]
+        return self._ask(str(image_path), SYSTEM_PROMPT, content, size)
+
+    def classify_pair(
+        self,
+        reference_path: str | Path,
+        current_path: str | Path,
+        crop: tuple[float, float, float, float] | None = None,
+    ) -> Detection:
+        """Fixed-camera mode: clean reference frame + current frame, same camera, optional shared crop."""
+        ref, mt1, _ = encode_image(reference_path, crop)
+        cur, mt2, size = encode_image(current_path, crop)
+        content = [
+            {"type": "text", "text": "Reference frame (earlier, clean):"},
+            {"type": "image", "source": {"type": "base64", "media_type": mt1, "data": ref}},
+            {"type": "text", "text": "Current frame:"},
+            {"type": "image", "source": {"type": "base64", "media_type": mt2, "data": cur}},
+            {"type": "text", "text": PAIR_USER_PROMPT},
+        ]
+        return self._ask(str(current_path), SYSTEM_PROMPT + PAIR_SYSTEM_ADDENDUM, content, size)
+
+    def _ask(self, path: str, system: str, content: list, size: tuple[int, int]) -> Detection:
+        image_path = path
         t0 = time.perf_counter()
         try:
             response = self.client.beta.messages.create(
@@ -165,16 +205,10 @@ class SpillDetector:
                 },
                 system=[{
                     "type": "text",
-                    "text": SYSTEM_PROMPT,
+                    "text": system,
                     "cache_control": {"type": "ephemeral"},
                 }],
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
-                        {"type": "text", "text": USER_PROMPT},
-                    ],
-                }],
+                messages=[{"role": "user", "content": content}],
             )
         except anthropic.APIError as e:
             return Detection(str(image_path), None, f"{type(e).__name__}: {e}", time.perf_counter() - t0, size, "")

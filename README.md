@@ -114,6 +114,32 @@ To update the public page: rebuild, then commit and push `docs/`. GitHub Pages r
 Which frames appear in the gallery is set by the `SHOWCASE` list at the top of `scripts/build_report.py`;
 the appendix always shows every frame in the latest Opus run.
 
+## 7. Fixed security camera mode
+
+The client may use the mall's existing CCTV instead of a robot camera. The pipeline for that:
+
+1. **Reference frame**: per-pixel median of the first seconds of the clip (empty floor, passers-by removed).
+2. **Candidates**: background difference against the reference, kept only where the change is still
+   there a couple of seconds later (`spilldetect/cctv.py`). Spills persist, people walk on.
+3. **Model**: each candidate is cropped at full resolution from both frames and sent to Claude in
+   two-image mode (`SpillDetector.classify_pair`): "has a liquid spill appeared on the floor?"
+4. A frame with no persistent change costs nothing.
+
+Evaluation data: two public fixed-camera clips in `data/raw/cctv/` (OpenCV `vtest.avi`, a walkway;
+CAVIAR `OneShopOneWait1cor.mpg`, a shopping-centre corridor, CC BY-SA) with synthetic spills composited
+onto the real floor (`spilldetect/synth.py`), so every positive has an exact box and every negative
+is real footage of people moving.
+
+```bash
+python scripts/build_cctv_pairs_video.py data/raw/cctv/vtest.avi --name walkway --pairs 30 --floor-poly "..."
+python scripts/build_cctv_pairs_video.py data/raw/cctv/OneShopOneWait1cor.mpg --name mallcorridor --pairs 30 --floor-poly "..."
+python scripts/run_cctv_eval.py --mode crops      # the real pipeline
+python scripts/run_cctv_eval.py --mode full       # whole frame, no candidate step, for comparison
+```
+
+The `--floor-poly` is the floor zone in frame fractions; in a real install the integrator draws it once per camera.
+Results land in `data/results/cctv_crops/` and `cctv_full/`.
+
 ## Cost
 
 Roughly 1,000 to 1,650 input tokens per frame after resizing, plus ~100 to 200 output tokens.
