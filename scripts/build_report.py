@@ -551,8 +551,8 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   <div class="tablewrap"><table>
     <thead><tr><th>One camera</th><th>Checks per day</th><th>Per day</th><th>Per month</th></tr></thead>
     <tbody>
-      <tr><th>Quiet floor: one check every 2 minutes</th><td>360</td><td>${360 * cctv_cost_pair:,.2f}</td><td>${360 * 30 * cctv_cost_pair:,.0f}</td></tr>
-      <tr><th>Busy corridor: one check every 30 seconds</th><td>1,440</td><td>${1440 * cctv_cost_pair:,.2f}</td><td>${1440 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>Quiet floor: one check every 4 minutes</th><td>180</td><td>${180 * cctv_cost_pair:,.2f}</td><td>${180 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>Busy corridor: one check every minute</th><td>720</td><td>${720 * cctv_cost_pair:,.2f}</td><td>${720 * 30 * cctv_cost_pair:,.0f}</td></tr>
     </tbody>
   </table></div>
   <div class="prose"><p class="note">The per-check cost was measured on crowded test clips where people standing still add crops; an empty floor costs less per check. Once enough labelled patches have accumulated, a small on-site model takes the easy decisions and the cloud model becomes a second opinion.</p></div>
