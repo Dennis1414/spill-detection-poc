@@ -355,23 +355,18 @@ def main() -> None:
         cctv_section = f"""
 <section id="fixed-camera">
   <div class="prose">
-    <p class="eyebrow">Fixed security cameras</p>
-    <h2 style="margin-top:6px">The same model on the mall's own cameras</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">If the cameras are fixed, the problem gets easier and cheaper. The server keeps a reference picture of each empty floor and only asks the model about patches that changed and <em>stayed</em> changed: a spill persists, a person walks on. Each such patch is cut out of both frames at full resolution and sent as a before-and-after pair. A frame with no persistent change costs nothing. The robot is dispatched only to a confirmed spill.</p>
+    <p class="eyebrow">How it works</p>
+    <h2 style="margin-top:6px">Reference, persistent change, verdict</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">Because the cameras never move, the server keeps a reference picture of each empty floor and only asks the model about patches that changed and <em>stayed</em> changed: a spill persists, a person walks on. Each such patch is cut out of the frames at full resolution and sent with the reference and a frame two seconds later. A frame with no persistent change costs nothing. The robot is dispatched only to a confirmed spill.</p>
   </div>
   <div class="steps">
     <div class="step"><div class="n">1 &middot; Reference</div><h3>Remember the empty floor</h3><p>A median over a few seconds of footage removes passers-by and leaves the clean floor, per camera. Refreshed slowly so lighting changes do not pile up.</p></div>
     <div class="step"><div class="n">2 &middot; Persistent change</div><h3>Find what appeared and stayed</h3><p>Difference against the reference, kept only where the change is still there two seconds later. People, trolleys and their shadows drop out; spills, dropped bags and signs remain.</p></div>
     <div class="step"><div class="n">3 &middot; Ask about the patch</div><h3>Three frames, one crop</h3><p>Claude sees the same crop from the reference, the current frame and a frame two seconds later, and answers "has a liquid spill appeared on the floor?" with the same JSON as before. The third frame is how it tells a spill, which stays, from a shadow, which walks away. Boxes come back in frame coordinates.</p></div>
   </div>
-  <div class="tiles">
-    <div class="tile"><div class="big">{pct(cs['recall'])}</div><div class="label">spills found</div><div class="src">{ccf['tp']} of {ccf['tp'] + ccf['fn']} rendered spills on real mall floors, {len(seqs)} cameras</div></div>
-    <div class="tile"><div class="big">{ccf['fp']}</div><div class="label">false alarms</div><div class="src">out of {ccf['tn'] + ccf['fp']} real frames with people moving</div></div>
-    <div class="tile"><div class="big">{cs['spill_located_correctly'].split(' of ')[0]}/{cs['spill_located_correctly'].split(' of ')[1]}</div><div class="label">placed at the right spot</div><div class="src">of the spills it found</div></div>
-    <div class="tile"><div class="big">{calls_per:.1f}</div><div class="label">model calls per frame</div><div class="src">about ${c_cost_pair:.3f} per checked frame</div></div>
-  </div>
   <div class="prose">
-    <p style="color:var(--fg-2)">Overall accuracy across all {n_pairs} pairs is <strong>{pct(cs['accuracy'])}</strong>. On the four mounted cameras alone ({len(mounted)} pairs) it is <strong>{pct(m_acc)}</strong>: {m_tp} of {m_tp + m_fn} spills found, {m_fp} false alarms in {m_fp + m_tn} real frames. The handheld walkway clip accounts for every false alarm, and the per-camera table below shows why.</p>
+    <p class="eyebrow" style="margin-top:8px">Results</p>
+    <p style="margin-top:6px;color:var(--fg-2)">Across all {n_pairs} pairs from {len(seqs)} cameras: <strong>{pct(cs['accuracy'])}</strong> accuracy, {ccf['tp']} of {ccf['tp'] + ccf['fn']} spills found, {ccf['fp']} false alarms in {ccf['tn'] + ccf['fp']} real frames, and {cs['spill_located_correctly']} found spills placed at the right spot. On the four mounted cameras alone ({len(mounted)} pairs): <strong>{pct(m_acc)}</strong> accuracy, {m_tp} of {m_tp + m_fn} spills found, {m_fp} false alarms in {m_fp + m_tn} real frames. The handheld walkway clip accounts for every false alarm; the per-camera table below shows why.</p>
   </div>
   <div class="prose">
     <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the same crop from the reference, the current frame and two seconds later. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
@@ -396,6 +391,22 @@ def main() -> None:
     <tbody>{per_camera_rows}</tbody>
   </table></div>
 </section>"""
+
+    # Header tiles: the mounted-camera numbers lead; fall back to the close-camera numbers if no CCTV run exists
+    if cs:
+        hdr_tiles = (
+            f'<div class="tile"><div class="big">{pct(m_acc)}</div><div class="label">accurate on mounted cameras</div><div class="src">{len(mounted)} before-and-after checks, 4 cameras</div></div>'
+            f'<div class="tile"><div class="big">{pct(m_tp / (m_tp + m_fn) if m_tp + m_fn else 0)}</div><div class="label">of spills found</div><div class="src">{m_tp} of {m_tp + m_fn} rendered spills on real floors</div></div>'
+            f'<div class="tile"><div class="big">{m_fp}</div><div class="label">false alarms</div><div class="src">in {m_fp + m_tn} real frames of people and trolleys</div></div>'
+            f'<div class="tile"><div class="big">${c_cost_pair:.2f}</div><div class="label">per checked frame</div><div class="src">frames with nothing persistent cost nothing</div></div>'
+        )
+        cctv_cost_pair, cctv_calls_per = c_cost_pair, calls_per
+    else:
+        hdr_tiles = (
+            f'<div class="tile"><div class="big">{pct(fo["accuracy"])}</div><div class="label">correct on floor frames</div><div class="src">{fo["n"]} labelled frames</div></div>'
+            f'<div class="tile"><div class="big">{fo["fp"]}</div><div class="label">false alarms</div><div class="src">of {fo["tn"] + fo["fp"]} frames with no spill</div></div>'
+        )
+        cctv_cost_pair, cctv_calls_per = cost_per, 1.0
 
     sample_json = json.dumps(find(opus, "333_mp4-11")["result"], indent=2) if find(opus, "333_mp4-11") else "{}"
 
@@ -522,22 +533,57 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <div class="wrap">
 <header>
-  <p class="eyebrow">Proof of concept &middot;Opus 5.5 vision &middot;15 October 2026</p>
-  <h1 style="margin-top:10px">Spill detection for the cleaning robot</h1>
-  <p class="lede" style="margin-top:18px">A camera frame goes in, a yes/no verdict with a location comes out. No training data was collected and no model was trained. A general vision model reads each frame against a written description of what a floor spill is, and every answer it gives is stored as a label for the on-device model that comes next. Tested two ways: single frames from a close camera, and before-and-after pairs from fixed security cameras, which is where the mall's existing CCTV comes in.</p>
+  <p class="eyebrow">Proof of concept &middot; Mall security cameras &middot; Opus 5.5 vision &middot; 21 October 2026</p>
+  <h1 style="margin-top:10px">Spill detection on the mall's own cameras</h1>
+  <p class="lede" style="margin-top:18px">The mall already has fixed cameras over every corridor and atrium. This proof of concept uses them to spot a liquid spill within seconds of it happening and to send the cleaning robot only to confirmed spills, so the robot does not patrol. No training data was collected and no model was trained: a general vision model judges what changed on the floor against a written description of a spill, and every answer is kept as a label for a smaller on-site model later.</p>
 
-  <div class="tiles">
-    <div class="tile"><div class="big">{pct(fo['accuracy'])}</div><div class="label">correct on floor frames</div><div class="src">{fo['n']} labelled frames, public dataset</div></div>
-    <div class="tile"><div class="big">{fo['fp']}</div><div class="label">false alarms</div><div class="src">out of {fo['tn'] + fo['fp']} frames with no spill</div></div>
-    <div class="tile"><div class="big">${cost_per:.3f}</div><div class="label">per frame</div><div class="src">measured, {len(opus)} frames, about ${cost_per * len(opus):.2f} total</div></div>
-    <div class="tile"><div class="big">{lat:.1f}s</div><div class="label">per frame</div><div class="src">mean round trip, 6 frames in flight</div></div>
-  </div>
+  <div class="tiles">{hdr_tiles}</div>
 </header>
+
+{cctv_section}
 
 <section>
   <div class="prose">
-    <p class="eyebrow">Pipeline</p>
-    <h2 style="margin-top:6px">How a frame becomes a verdict</h2>
+    <p class="eyebrow">Cost at scale</p>
+    <h2 style="margin-top:6px">What this costs across a mall</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">The camera server does the cheap work for free: it keeps the reference, finds changes and drops the ones that walk away. Only persistent patches reach the model, and each checked frame costs about ${cctv_cost_pair:.3f} with {cctv_calls_per:.1f} crops on average in the busy test clips. The bill is therefore set by how many checks a camera triggers per day, not by how many frames it records.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Checks that reach the model</th><th>Per camera per day</th><th>50 cameras per day</th><th>50 cameras per month</th></tr></thead>
+    <tbody>
+      <tr><th>Quiet floor: 50 checks a day</th><td>${50 * cctv_cost_pair:,.2f}</td><td>${50 * 50 * cctv_cost_pair:,.0f}</td><td>${50 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>Busy corridor: 300 checks a day</th><td>${300 * cctv_cost_pair:,.2f}</td><td>${300 * 50 * cctv_cost_pair:,.0f}</td><td>${300 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>No filtering at all: one check every 10 s, 12 h</th><td>${4320 * cctv_cost_pair:,.0f}</td><td>${4320 * 50 * cctv_cost_pair:,.0f}</td><td>${4320 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p class="note">The last row is why the persistence filter matters: without it the cloud model is unaffordable. The check counts in the first two rows are planning assumptions, not measurements; the first real camera gives the actual rate. Crowded scenes with people standing still generate more crops per check than empty ones. Once enough labelled patches have accumulated, a small on-site model takes the easy decisions and the cloud model becomes a second opinion.</p></div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Next</p>
+    <h2 style="margin-top:6px">Roadmap</h2>
+  </div>
+  <div class="road">
+    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on five modern mall cameras (1080p to 4K) with rendered spills: no false alarms on the mounted cameras.</div></div>
+    <div class="now"><div class="when">Next</div><div><strong>One real mall camera, real spills.</strong> A few hours of footage from a single camera in any mall, with water, coffee and oil spilled on the floor in view. This replaces the rendered positives and gives the true recall number and the real check rate.</div></div>
+    <div><div class="when">Then</div><div><strong>Hard negatives at scale.</strong> Polished stone, reflections, cleaning carts, wet-floor signs, dropped bags. Measure the false-alarm rate per camera per day, which is what decides whether staff trust the alerts.</div></div>
+    <div><div class="when">Later</div><div><strong>Camera-server deployment.</strong> Reference and persistence run on the camera server at no cost; only persistent patches go to the model. Robot dispatch on confirmed spills. An on-site model trained from the accumulated labels where the cloud call is not wanted.</div></div>
+  </div>
+</section>
+
+<section id="close-camera">
+  <div class="prose">
+    <p class="eyebrow">Also tested</p>
+    <h2 style="margin-top:6px">A close camera on the robot itself</h2>
+    <p style="margin-top:10px;color:var(--fg-2)">Before the camera question was settled, the same model was tested on single close-range frames, the view a camera on the robot would have. It is kept here because it is the fallback if a mall's cameras cannot be used, and because it shows how the model behaves on a public spill dataset with real liquids.</p>
+  </div>
+</section>
+
+<section>
+  <div class="prose">
+    <p class="eyebrow">Close camera &middot; pipeline</p>
+    <h2 style="margin-top:6px">How a single frame becomes a verdict</h2>
   </div>
   <div class="steps">
     <div class="step"><div class="n">1 &middot;Sample</div><h3>Pull frames from the camera</h3><p>One or two frames per second is enough for a slow-moving robot. Near-identical frames are dropped so a parked robot does not keep paying to look at the same tile.</p></div>
@@ -552,9 +598,9 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <section>
   <div class="prose">
-    <p class="eyebrow">Gallery</p>
+    <p class="eyebrow">Close camera &middot; gallery</p>
     <h2 style="margin-top:6px">What the model saw, and what it said</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">Real frames from the public dataset. The amber box is where the model says the spill is. The text under each frame is the model's own one-line reason, unedited.</p>
+    <p style="margin-top:10px;color:var(--fg-2)">Real close-range frames from the public dataset. The amber box is where the model says the spill is. The text under each frame is the model's own one-line reason, unedited.</p>
   </div>
   <div class="chips" role="group" aria-label="Filter frames">
     <button class="chip" type="button" data-filter="all" aria-pressed="true">All {len(cards)}</button>
@@ -568,8 +614,8 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <section>
   <div class="prose">
-    <p class="eyebrow">Evaluation</p>
-    <h2 style="margin-top:6px">Numbers behind the headline</h2>
+    <p class="eyebrow">Close camera &middot; evaluation</p>
+    <h2 style="margin-top:6px">Numbers on the public dataset</h2>
     <p style="margin-top:10px;color:var(--fg-2)">{len(opus)} frames drawn at random from the validation split of the public Spill_Detection dataset (Roboflow, CC BY 4.0). The dataset labels any visible liquid as "water", including coffee on a laptop, water on a sofa or juice on a table. {fo['non_floor']} of the {len(opus)} were like that, checked by eye. The model refused to call them floor spills, which is the behaviour we want, so they are reported separately rather than counted as misses.</p>
   </div>
   <div class="tablewrap"><table>
@@ -582,15 +628,13 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
     </tbody>
   </table></div>
   <div class="prose">
-    <p class="note">Caveat for the demo: the negatives in this public set are mostly unrelated photos (people, trolleys, bus stops). They prove the model does not hallucinate spills, but they are not the hard negatives a mall produces. Reflections on polished stone, dark tiles and shadows will be tested on our own robot-height footage next.</p>
+    <p class="note">Caveat: the negatives in this public set are mostly unrelated photos (people, trolleys, bus stops). They prove the model does not hallucinate spills, but they are not the hard negatives a mall produces. Those are covered by the fixed-camera test above.</p>
   </div>
 </section>
 
-{cctv_section}
-
 <section>
   <div class="prose">
-    <p class="eyebrow">Model choice</p>
+    <p class="eyebrow">Close camera &middot; model choice</p>
     <h2 style="margin-top:6px">Why Opus 5.5 and not the cheaper model</h2>
     <p style="margin-top:10px;color:var(--fg-2)">Claude Haiku 5.5 costs about a thirtieth as much. On the same {len(opus)} frames its headline score is close, but it is less consistent: it ignored the floor-only rule on {fh['non_floor'] - fh['rule_ok']} of the {fh['non_floor']} mislabelled frames, gave up on several abstract splash images, and missed the one genuinely hard floor spill in the set.</p>
   </div>
@@ -604,36 +648,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <section>
   <div class="prose">
-    <p class="eyebrow">Cost at scale</p>
-    <h2 style="margin-top:6px">What this costs to run</h2>
-  </div>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Scenario</th><th>Frames</th><th>Estimated cost</th></tr></thead>
-    <tbody>
-      <tr><th>One robot, 1 frame/s, 8 h shift</th><td>28,800</td><td>${28800 * cost_per:,.0f} per shift</td></tr>
-      <tr><th>One robot, 1 frame every 5 s, 8 h shift</th><td>5,760</td><td>${5760 * cost_per:,.0f} per shift</td></tr>
-      <tr><th>Label 10,000 frames for training</th><td>10,000</td><td>${10000 * cost_per:,.0f} once</td></tr>
-    </tbody>
-  </table></div>
-  <div class="prose"><p class="note">Per-frame cost measured in this run with prompt caching active. The cloud model is the proof-of-concept and labelling engine. The production robot runs a small on-device model trained on these labels, with no per-frame cost, and calls the cloud only for frames it is unsure about.</p></div>
-</section>
-
-<section>
-  <div class="prose">
-    <p class="eyebrow">Next</p>
-    <h2 style="margin-top:6px">Roadmap</h2>
-  </div>
-  <div class="road">
-    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on five modern mall cameras (1080p to 4K) with rendered spills: zero false alarms on real footage.</div></div>
-    <div class="now"><div class="when">Next</div><div><strong>One real mall camera, real spills.</strong> A few hours of footage from a single camera in any mall, with water, coffee and oil spilled on the floor in view. This replaces the synthetic positives and gives the true recall number.</div></div>
-    <div><div class="when">Then</div><div><strong>Hard negatives at scale.</strong> Polished stone, reflections, cleaning carts, wet-floor signs, dropped bags. Measure the false-alarm rate per camera per day, which is what decides whether staff trust the alerts.</div></div>
-    <div><div class="when">Later</div><div><strong>Camera-server deployment.</strong> Reference and persistence run on the camera server at no cost; only persistent patches go to the model. Robot dispatch on confirmed spills. An on-device model trained from the accumulated labels where the cloud call is not wanted.</div></div>
-  </div>
-</section>
-
-<section>
-  <div class="prose">
-    <p class="eyebrow">Appendix</p>
+    <p class="eyebrow">Close camera &middot; appendix</p>
     <h2 style="margin-top:6px">Every frame in the evaluation</h2>
     <p style="margin-top:10px;color:var(--fg-2)">All {n_all} frames the model was scored on, spills first, highest confidence first. The {len(cards)} frames in the gallery above were picked by hand from this set to show one of each situation; this list is the unfiltered whole. Hover a frame for the model's reason.</p>
   </div>
@@ -645,7 +660,8 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <footer>
   <div>Model: claude-opus-5-5, effort low, structured JSON output. Frames resized to at most 1.15 megapixels before upload.</div>
-  <div>Data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, {len(opus)} frames, random seed 0.</div>
+  <div>Fixed-camera footage: five mall clips from Pixabay and Pexels (Pixabay Content License, Pexels License), real floors with rendered spills; no AI image generation was used anywhere in this work.</div>
+  <div>Close-camera data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, {len(opus)} frames, random seed 0.</div>
   <div>Report generated from data/results by scripts/build_report.py.</div>
 </footer>
 </div>
