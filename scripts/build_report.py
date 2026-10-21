@@ -340,7 +340,7 @@ def main() -> None:
         m_tn = sum(1 for r in mounted if not r["has_spill"] and not r["pred"])
         m_acc = (m_tp + m_tn) / len(mounted) if mounted else 0
         cam_names = {"walkway_vert": "Mall walkway, handheld phone (not mounted)", "corridor_vert": "Covered corridor, vertical",
-                     "atrium_escalators": "Atrium with escalators, elevated", "atrium_4k": "Multi-level atrium, 4K, elevated",
+                     "atrium_escalators": "Atrium with escalators, elevated", "atrium_4k": "Multi-level atrium, elevated (negatives only)",
                      "plaza_overhead": "Plaza, overhead", "walkway": "Campus walkway (OpenCV)", "mallcorridor": "CAVIAR corridor"}
         per_camera_rows = ""
         for s in seqs:
@@ -349,7 +349,7 @@ def main() -> None:
             res = next((r.get("res") for r in crows if r["seq"] == s and r.get("res")), None)
             found = [r for r in sp if r["pred"]]
             smallest = min((r["spill_width_frac"] for r in found), default=None)
-            per_camera_rows += (f"<tr><th>{html.escape(cam_names.get(s, s))}</th><td>{res[0]}&times;{res[1] if res else ''}</td>"
+            per_camera_rows += (f"<tr><th>{html.escape(cam_names.get(s, s))}</th>"
                                 f"<td>{len(found)} of {len(sp)}</td><td>{sum(1 for r in sn if r['pred'])} of {len(sn)}</td>"
                                 f"<td>{f'{smallest*100:.0f}% of frame width' if smallest else '&mdash;'}</td></tr>")
         cctv_section = f"""
@@ -357,7 +357,7 @@ def main() -> None:
   <div class="prose">
     <p class="eyebrow">How it works</p>
     <h2 style="margin-top:6px">Reference, persistent change, verdict</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">Because the cameras never move, the server keeps a reference picture of each empty floor and only asks the model about patches that changed and <em>stayed</em> changed: a spill persists, a person walks on. Each such patch is cut out of the frames at full resolution and sent with the reference and a frame two seconds later. A frame with no persistent change costs nothing. The robot is dispatched only to a confirmed spill.</p>
+    <p style="margin-top:10px;color:var(--fg-2)">Because the cameras never move, the server keeps a reference picture of each empty floor and only asks the model about patches that changed and <em>stayed</em> changed: a spill persists, a person walks on. Each such patch is cut out of the frames at full size and sent with the reference and a frame two seconds later. A frame with no persistent change costs nothing. The robot is dispatched only to a confirmed spill.</p>
   </div>
   <div class="steps">
     <div class="step"><div class="n">1 &middot; Reference</div><h3>Remember the empty floor</h3><p>A median over a few seconds of footage removes passers-by and leaves the clean floor, per camera. Refreshed slowly so lighting changes do not pile up.</p></div>
@@ -384,10 +384,10 @@ def main() -> None:
     </tbody>
   </table></div>
   <div class="prose">
-    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls, 1080p to 4K, from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. One kept clip, the vertical walkway, is handheld rather than mounted, so its glossy tiles reflect the shop walls differently as the viewpoint shifts. It is the hardest camera here and the source of most false alarms; a mounted camera would not do that. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
+    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. One kept clip, the vertical walkway, is handheld rather than mounted, so its glossy tiles reflect the shop walls differently as the viewpoint shifts. It is the hardest camera here and the source of most false alarms; a mounted camera would not do that. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Camera</th><th>Resolution</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
+    <thead><tr><th>Camera</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
     <tbody>{per_camera_rows}</tbody>
   </table></div>
 </section>"""
@@ -546,17 +546,16 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
   <div class="prose">
     <p class="eyebrow">Cost at scale</p>
     <h2 style="margin-top:6px">What this costs across a mall</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">The camera server does the cheap work for free: it keeps the reference, finds changes and drops the ones that walk away. Only persistent patches reach the model, and each checked frame costs about ${cctv_cost_pair:.3f} with {cctv_calls_per:.1f} crops on average in the busy test clips. The bill is therefore set by how many checks a camera triggers per day, not by how many frames it records.</p>
+    <p style="margin-top:10px;color:var(--fg-2)">The camera server does the cheap work for free: it keeps the reference, finds changes and drops the ones that walk away. Only persistent patches reach the model, and each check costs about ${cctv_cost_pair:.3f} at the {cctv_calls_per:.1f} crops per check seen in the busy test clips. One camera, a 12-hour day:</p>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Checks that reach the model</th><th>Per camera per day</th><th>50 cameras per day</th><th>50 cameras per month</th></tr></thead>
+    <thead><tr><th>One camera</th><th>Checks per day</th><th>Per day</th><th>Per month</th></tr></thead>
     <tbody>
-      <tr><th>Quiet floor: 50 checks a day</th><td>${50 * cctv_cost_pair:,.2f}</td><td>${50 * 50 * cctv_cost_pair:,.0f}</td><td>${50 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
-      <tr><th>Busy corridor: 300 checks a day</th><td>${300 * cctv_cost_pair:,.2f}</td><td>${300 * 50 * cctv_cost_pair:,.0f}</td><td>${300 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
-      <tr><th>No filtering at all: one check every 10 s, 12 h</th><td>${4320 * cctv_cost_pair:,.0f}</td><td>${4320 * 50 * cctv_cost_pair:,.0f}</td><td>${4320 * 50 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>Quiet floor: one check every 2 minutes</th><td>360</td><td>${360 * cctv_cost_pair:,.2f}</td><td>${360 * 30 * cctv_cost_pair:,.0f}</td></tr>
+      <tr><th>Busy corridor: one check every 30 seconds</th><td>1,440</td><td>${1440 * cctv_cost_pair:,.2f}</td><td>${1440 * 30 * cctv_cost_pair:,.0f}</td></tr>
     </tbody>
   </table></div>
-  <div class="prose"><p class="note">The last row is why the persistence filter matters: without it the cloud model is unaffordable. The check counts in the first two rows are planning assumptions, not measurements; the first real camera gives the actual rate. Crowded scenes with people standing still generate more crops per check than empty ones. Once enough labelled patches have accumulated, a small on-site model takes the easy decisions and the cloud model becomes a second opinion.</p></div>
+  <div class="prose"><p class="note">The per-check cost was measured on crowded test clips where people standing still add crops; an empty floor costs less per check. Once enough labelled patches have accumulated, a small on-site model takes the easy decisions and the cloud model becomes a second opinion.</p></div>
 </section>
 
 <section>
@@ -565,7 +564,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
     <h2 style="margin-top:6px">Roadmap</h2>
   </div>
   <div class="road">
-    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on five modern mall cameras (1080p to 4K) with rendered spills: no false alarms on the mounted cameras.</div></div>
+    <div><div class="when">Done</div><div><strong>Fixed-camera pipeline.</strong> Reference, persistent change, before-and-after crops. Tested on five mall cameras with rendered spills: no false alarms on the mounted cameras.</div></div>
     <div class="now"><div class="when">Next</div><div><strong>One real mall camera, real spills.</strong> A few hours of footage from a single camera in any mall, with water, coffee and oil spilled on the floor in view. This replaces the rendered positives and gives the true recall number and the real check rate.</div></div>
     <div><div class="when">Then</div><div><strong>Hard negatives at scale.</strong> Polished stone, reflections, cleaning carts, wet-floor signs, dropped bags. Measure the false-alarm rate per camera per day, which is what decides whether staff trust the alerts.</div></div>
     <div><div class="when">Later</div><div><strong>Camera-server deployment.</strong> Reference and persistence run on the camera server at no cost; only persistent patches go to the model. Robot dispatch on confirmed spills. An on-site model trained from the accumulated labels where the cloud call is not wanted.</div></div>
@@ -659,7 +658,7 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 </section>
 
 <footer>
-  <div>Model: claude-opus-5-5, effort low, structured JSON output. Frames resized to at most 1.15 megapixels before upload.</div>
+  <div>Model: claude-opus-5-5, effort low, structured JSON output.</div>
   <div>Fixed-camera footage: five mall clips from Pixabay and Pexels (Pixabay Content License, Pexels License), real floors with rendered spills; no AI image generation was used anywhere in this work.</div>
   <div>Close-camera data: Spill_Detection v4 by slipp on Roboflow Universe, CC BY 4.0. Validation split, {len(opus)} frames, random seed 0.</div>
   <div>Report generated from data/results by scripts/build_report.py.</div>
