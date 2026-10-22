@@ -772,7 +772,7 @@ section { margin-top: 26px; break-inside: auto; }
 .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .tile .big { font-size: 26px; }
 .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .gallery.pairs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .tablewrap { overflow: hidden; } table { table-layout: fixed; width: 100%; } th, td { font-size: 10.5px; padding: 6px 8px; word-wrap: break-word; }
 .frame, .pair, .tile, .step, .compare, table, pre { break-inside: avoid; page-break-inside: avoid; }
