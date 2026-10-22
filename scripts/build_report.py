@@ -755,6 +755,36 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
     pages_out.write_text(standalone, encoding="utf-8")
     print(f"wrote {pages_out.relative_to(ROOT)} for GitHub Pages")
 
+    # Print variant for the PDF: light palette, no collapsible appendices, eager images, cards kept whole.
+    import re as _re
+    printable = standalone.replace('loading="lazy"', "")
+    printable = _re.sub(r"<details>.*?</details>", "", printable, flags=_re.S)
+    printable = _re.sub(r'<div class="chips".*?</div>\s*', "", printable, count=1, flags=_re.S)
+    print_css = """<style>
+html { color-scheme: light !important; }
+@page { size: A4; margin: 14mm 12mm; }
+body { font-size: 11.5px; }
+.wrap { max-width: none; padding-block: 0; padding-inline: 0; }
+h1 { font-size: 30px; } h2 { font-size: 20px; } .lede { font-size: 13.5px; }
+section { margin-top: 26px; break-inside: auto; }
+.tiles { grid-template-columns: repeat(4, 1fr); }
+.tile .big { font-size: 26px; }
+.steps { grid-template-columns: repeat(3, 1fr); }
+.gallery { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.gallery.pairs { grid-template-columns: repeat(2, 1fr); }
+.frame, .pair, .tile, .step, .compare, table, pre { break-inside: avoid; page-break-inside: avoid; }
+.reason { font-size: 10.5px; } .caption { font-size: 9.5px; }
+.pill { font-size: 9px; } .conf, .lat, .meta { font-size: 9.5px; }
+#close-camera { break-before: page; page-break-before: always; }
+footer { margin-top: 24px; }
+</style>
+"""
+    printable = printable.replace("</head>", print_css + "</head>", 1)
+    printable = printable.replace('<html lang="en">', '<html lang="en" data-theme="light">', 1)
+    print_out = ROOT / "report" / "print.html"
+    print_out.write_text(printable, encoding="utf-8")
+    print(f"wrote {print_out.relative_to(ROOT)} for PDF rendering")
+
 
 if __name__ == "__main__":
     main()
