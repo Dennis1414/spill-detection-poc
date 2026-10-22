@@ -764,14 +764,17 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 html { color-scheme: light !important; }
 @page { size: A4; margin: 14mm 12mm; }
 body { font-size: 11.5px; }
-.wrap { max-width: none; padding-block: 0; padding-inline: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { width: 100%; overflow-x: hidden; }
+.wrap { max-width: 100%; width: 100%; padding-block: 0; padding-inline: 0 3mm; }
 h1 { font-size: 30px; } h2 { font-size: 20px; } .lede { font-size: 13.5px; }
 section { margin-top: 26px; break-inside: auto; }
-.tiles { grid-template-columns: repeat(4, 1fr); }
+.tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .tile .big { font-size: 26px; }
-.steps { grid-template-columns: repeat(3, 1fr); }
-.gallery { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-.gallery.pairs { grid-template-columns: repeat(2, 1fr); }
+.steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.gallery.pairs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tablewrap { overflow: hidden; } table { table-layout: fixed; width: 100%; } th, td { font-size: 10.5px; padding: 6px 8px; word-wrap: break-word; }
 .frame, .pair, .tile, .step, .compare, table, pre { break-inside: avoid; page-break-inside: avoid; }
 .reason { font-size: 10.5px; } .caption { font-size: 9.5px; }
 .pill { font-size: 9px; } .conf, .lat, .meta { font-size: 9.5px; }
