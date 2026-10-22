@@ -188,6 +188,48 @@ def cctv_card(r: dict, caption: str) -> str:
 </figure>"""
 
 
+def cctv_small_card(r: dict) -> str:
+    """Appendix card for one fixed-camera check: the current-frame crop the model judged, boxes, verdict, truth."""
+    gt_c = None
+    if r["gt_bbox"]:
+        gt_c = (r["gt_bbox"][0] + r["gt_bbox"][2] / 2, r["gt_bbox"][1] + r["gt_bbox"][3] / 2)
+    calls = [c for c in r["calls"] if "spill" in c]
+    call = next((c for c in calls if c["spill"]), None)
+    if call is None and gt_c:
+        call = next((c for c in calls if c.get("crop") and _contains(c["crop"], gt_c)), None)
+    if call is None and calls:
+        call = calls[0]
+    crop = call["crop"] if call and call.get("crop") else [0, 0, 1, 1]
+    cx, cy, cw, ch = crop
+    boxes = ""
+    if r["gt_bbox"]:
+        bx, by, bw, bh = r["gt_bbox"]
+        boxes += f'<div class="gtbox" style="left:{(bx-cx)/cw*100:.1f}%;top:{(by-cy)/ch*100:.1f}%;width:{bw/cw*100:.1f}%;height:{bh/ch*100:.1f}%"></div>'
+    if call and call.get("spill") and call.get("bbox_frame"):
+        bx, by, bw, bh = call["bbox_frame"]
+        boxes += f'<div class="box" style="left:{(bx-cx)/cw*100:.1f}%;top:{(by-cy)/ch*100:.1f}%;width:{bw/cw*100:.1f}%;height:{bh/ch*100:.1f}%"></div>'
+    pred = r["pred"]
+    if r["has_spill"]:
+        status, cls = ("found", "ok") if pred else ("missed", "bad")
+        truth = f"{r['kind']}, {r['spill_width_frac']*100:.0f}% wide"
+    else:
+        status, cls = ("false alarm", "bad") if pred else ("clear", "ok")
+        truth = "no spill"
+    conf = call["confidence"] if call else 0.0
+    reason = call["reasoning"] if call else r["reasoning"]
+    if not calls:
+        status, cls, reason = "clear, not sent", "ok", r["reasoning"]
+    return f"""
+<figure class="small" title="{html.escape(reason)}">
+  <div class="img"><img src="{crop_b64(r['cur'], crop, 220)}" alt="{html.escape(reason[:100])}" loading="lazy">{boxes}</div>
+  <figcaption>
+    <span class="pill {'spill' if pred else 'clear'}">{'Spill' if pred else 'Clear'}</span>
+    <span class="conf">{conf:.2f}</span>
+    <span class="status {cls}">{status} &middot; {html.escape(truth)} &middot; {html.escape(r['seq'].replace('_', ' '))}</span>
+  </figcaption>
+</figure>"""
+
+
 def floor_only(summary: dict, rows: dict[str, dict]) -> dict:
     """Metrics after removing the hand-reviewed non-floor images."""
     tp = fp = tn = fn = 0
@@ -340,6 +382,10 @@ def main() -> None:
         wshow += [(r, f"{r['seq']} camera, a water spill it missed") for r in wmiss]
         water_cards = "\n".join(cctv_card(r, cap) for r, cap in wshow)
         water_smallest_w = min((r["spill_width_frac"] for r in water_found), default=0)
+
+        # Appendix: every check, spills first, then the ones the model got wrong, then by camera
+        ordered = sorted(crows, key=lambda r: (not r["has_spill"], r["pred"] == r["has_spill"], r["seq"], -r["confidence"]))
+        cctv_appendix = "\n".join(cctv_small_card(r) for r in ordered)
         calls_per = cs["model_calls"] / n_pairs
         c_cost_pair = cs["this_run"]["est_cost_usd"] / cs["this_run"]["pairs"] if cs["this_run"]["pairs"] else 0
         f_cost_pair = fs["this_run"]["est_cost_usd"] / fs["this_run"]["pairs"] if fs and fs["this_run"]["pairs"] else 0
@@ -404,6 +450,15 @@ def main() -> None:
       <tr><th>Latency per frame</th><td>{c_lat:.1f} s</td><td>{f_lat:.1f} s</td></tr>
     </tbody>
   </table></div>
+  <div class="prose">
+    <p class="eyebrow" style="margin-top:16px">Appendix</p>
+    <h3 style="margin-top:6px">Every check on the mall cameras</h3>
+    <p style="margin-top:8px;color:var(--fg-2)">All {n_pairs} checks, spills first, then the ones the model got wrong, then by camera. Each shows the crop the model judged in the current frame: thin green is the true spill, amber is the model's answer. Hover for its reason.</p>
+  </div>
+  <details>
+    <summary>Show all {n_pairs} checks</summary>
+    <div class="all">{cctv_appendix}</div>
+  </details>
 </section>"""
 
     # Header tiles: the mounted-camera numbers lead; fall back to the close-camera numbers if no CCTV run exists
