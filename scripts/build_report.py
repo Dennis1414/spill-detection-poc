@@ -765,8 +765,10 @@ html { color-scheme: light !important; }
 @page { size: A4; margin: 14mm 12mm; }
 body { font-size: 11.5px; }
 *, *::before, *::after { box-sizing: border-box; }
-html, body { width: 100%; overflow-x: hidden; }
-.wrap { max-width: 100%; width: 100%; padding-block: 0; padding-inline: 0 3mm; }
+html, body { width: 100%; overflow-x: hidden; background: #ffffff !important; }
+:root { --bg: #ffffff; --surface: #ffffff; --surface-2: #f1efe9; --line: #d9d6cd; }
+.wrap { max-width: 100%; width: 100%; padding-block: 0; padding-inline: 0; }
+.tile, .frame, .pair { background: #fbfaf7; }
 h1 { font-size: 30px; } h2 { font-size: 20px; } .lede { font-size: 13.5px; }
 section { margin-top: 26px; break-inside: auto; }
 .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
