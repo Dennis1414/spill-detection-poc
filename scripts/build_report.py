@@ -627,26 +627,6 @@ footer {{ margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px
 
 <section>
   <div class="prose">
-    <p class="eyebrow">Close camera &middot; evaluation</p>
-    <h2 style="margin-top:6px">Numbers on the public dataset</h2>
-    <p style="margin-top:10px;color:var(--fg-2)">{len(opus)} frames drawn at random from the validation split of the public Spill_Detection dataset (Roboflow, CC BY 4.0). The dataset labels any visible liquid as "water", including coffee on a laptop, water on a sofa or juice on a table. {fo['non_floor']} of the {len(opus)} were like that, checked by eye. The model refused to call them floor spills, which is the behaviour we want, so they are reported separately rather than counted as misses.</p>
-  </div>
-  <div class="tablewrap"><table>
-    <thead><tr><th></th><th>All {len(opus)} frames, raw labels</th><th>Floor frames only ({fo['n']})</th></tr></thead>
-    <tbody>
-      <tr><th>Accuracy</th><td>{pct(opus_sum['accuracy'])}</td><td class="hi">{pct(fo['accuracy'])}</td></tr>
-      <tr><th>Spills found</th><td>{conf['tp']} of {conf['tp'] + conf['fn']}</td><td class="hi">{fo['tp']} of {fo['tp'] + fo['fn']}</td></tr>
-      <tr><th>False alarms</th><td>{conf['fp']} of {conf['tn'] + conf['fp']}</td><td class="hi">{fo['fp']} of {fo['tn'] + fo['fp']}</td></tr>
-      <tr><th>Non-floor liquids labelled "water"</th><td>{fo['non_floor']}, counted as misses</td><td>excluded</td></tr>
-    </tbody>
-  </table></div>
-  <div class="prose">
-    <p class="note">Caveat: the negatives in this public set are mostly unrelated photos (people, trolleys, bus stops). They prove the model does not hallucinate spills, but they are not the hard negatives a mall produces. Those are covered by the fixed-camera test above.</p>
-  </div>
-</section>
-
-<section>
-  <div class="prose">
     <p class="eyebrow">Close camera &middot; model choice</p>
     <h2 style="margin-top:6px">Why Opus 5.5 and not the cheaper model</h2>
     <p style="margin-top:10px;color:var(--fg-2)">Claude Haiku 5.5 costs about a thirtieth as much. On the same {len(opus)} frames its headline score is close, but it is less consistent: it ignored the floor-only rule on {fh['non_floor'] - fh['rule_ok']} of the {fh['non_floor']} mislabelled frames, gave up on several abstract splash images, and missed the one genuinely hard floor spill in the set.</p>
