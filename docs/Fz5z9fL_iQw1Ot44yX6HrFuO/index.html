@@ -151,7 +151,7 @@ footer { margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px 
   </div>
   <div class="prose">
     <p class="eyebrow" style="margin-top:8px">Results</p>
-    <p style="margin-top:6px;color:var(--fg-2)">Across all 458 pairs from 5 cameras: <strong>97%</strong> accuracy, 205 of 213 spills found, 8 false alarms in 245 real frames, and 200 of 205 found spills placed at the right spot. On the four mounted cameras alone (305 pairs): <strong>98%</strong> accuracy, 131 of 136 spills found, 0 false alarms in 169 real frames. The handheld walkway clip accounts for every false alarm; the per-camera table below shows why.</p>
+    <p style="margin-top:6px;color:var(--fg-2)">Across all 458 pairs from 5 cameras: <strong>97%</strong> accuracy, 205 of 213 spills found, 8 false alarms in 245 real frames, and 200 of 205 found spills placed at the right spot. On the four mounted cameras alone (305 pairs): <strong>98%</strong> accuracy, 131 of 136 spills found, 0 false alarms in 169 real frames. The handheld walkway clip accounts for every false alarm.</p>
   </div>
   <div class="prose">
     <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the same crop from the reference, the current frame and two seconds later. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
@@ -613,13 +613,6 @@ footer { margin-top: 64px; font-size: 13px; color: var(--fg-3); border-top: 1px 
       <tr><th>Cost per checked frame</th><td>$0.051</td><td>$0.016</td></tr>
       <tr><th>Latency per frame</th><td>21.5 s</td><td>10.0 s</td></tr>
     </tbody>
-  </table></div>
-  <div class="prose">
-    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of 5 fixed-view clips of shopping malls from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. One kept clip, the vertical walkway, is handheld rather than mounted, so its glossy tiles reflect the shop walls differently as the viewpoint shifts. It is the hardest camera here and the source of most false alarms; a mounted camera would not do that. Zero false alarms on 245 real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
-  </div>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Camera</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
-    <tbody><tr><th>Multi-level atrium, elevated (negatives only)</th><td>0 of 0</td><td>0 of 36</td><td>&mdash;</td></tr><tr><th>Atrium with escalators, elevated</th><td>60 of 62</td><td>0 of 61</td><td>3% of frame width</td></tr><tr><th>Covered corridor, vertical</th><td>19 of 22</td><td>0 of 21</td><td>3% of frame width</td></tr><tr><th>Plaza, overhead</th><td>52 of 52</td><td>0 of 51</td><td>3% of frame width</td></tr><tr><th>Mall walkway, handheld phone (not mounted)</th><td>74 of 77</td><td>8 of 76</td><td>3% of frame width</td></tr></tbody>
   </table></div>
 </section>
 

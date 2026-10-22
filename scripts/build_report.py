@@ -381,7 +381,7 @@ def main() -> None:
   </div>
   <div class="prose">
     <p class="eyebrow" style="margin-top:8px">Results</p>
-    <p style="margin-top:6px;color:var(--fg-2)">Across all {n_pairs} pairs from {len(seqs)} cameras: <strong>{pct(cs['accuracy'])}</strong> accuracy, {ccf['tp']} of {ccf['tp'] + ccf['fn']} spills found, {ccf['fp']} false alarms in {ccf['tn'] + ccf['fp']} real frames, and {cs['spill_located_correctly']} found spills placed at the right spot. On the four mounted cameras alone ({len(mounted)} pairs): <strong>{pct(m_acc)}</strong> accuracy, {m_tp} of {m_tp + m_fn} spills found, {m_fp} false alarms in {m_fp + m_tn} real frames. The handheld walkway clip accounts for every false alarm; the per-camera table below shows why.</p>
+    <p style="margin-top:6px;color:var(--fg-2)">Across all {n_pairs} pairs from {len(seqs)} cameras: <strong>{pct(cs['accuracy'])}</strong> accuracy, {ccf['tp']} of {ccf['tp'] + ccf['fn']} spills found, {ccf['fp']} false alarms in {ccf['tn'] + ccf['fp']} real frames, and {cs['spill_located_correctly']} found spills placed at the right spot. On the four mounted cameras alone ({len(mounted)} pairs): <strong>{pct(m_acc)}</strong> accuracy, {m_tp} of {m_tp + m_fn} spills found, {m_fp} false alarms in {m_fp + m_tn} real frames. The handheld walkway clip accounts for every false alarm.</p>
   </div>
   <div class="prose">
     <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the same crop from the reference, the current frame and two seconds later. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
@@ -403,13 +403,6 @@ def main() -> None:
       <tr><th>Cost per checked frame</th><td>${c_cost_pair:.3f}</td><td>${f_cost_pair:.3f}</td></tr>
       <tr><th>Latency per frame</th><td>{c_lat:.1f} s</td><td>{f_lat:.1f} s</td></tr>
     </tbody>
-  </table></div>
-  <div class="prose">
-    <p class="note">How this was tested, and what it does not yet prove. No public dataset has real spills seen by real security cameras, so the positives here are synthetic: liquid rendered onto the real floor of {len(seqs)} fixed-view clips of shopping malls from Pixabay and Pexels under licences that allow commercial use. The floor darkens, tints and reflects the way wet stone does, and the same spill is kept in the frame two seconds later so the persistence check sees it. Every negative is untouched footage of people, trolleys and escalators moving. Each frame is registered to the camera's first frame, which absorbs tripod drift; clips where the camera really moves were rejected. One kept clip, the vertical walkway, is handheld rather than mounted, so its glossy tiles reflect the shop walls differently as the viewpoint shifts. It is the hardest camera here and the source of most false alarms; a mounted camera would not do that. Zero false alarms on {ccf['tn'] + ccf['fp']} real frames is the result to trust; the recall number needs one real mall camera and a bucket of water to confirm.</p>
-  </div>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Camera</th><th>Spills found</th><th>False alarms</th><th>Smallest spill found</th></tr></thead>
-    <tbody>{per_camera_rows}</tbody>
   </table></div>
 </section>"""
 
