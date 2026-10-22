@@ -325,6 +325,21 @@ def main() -> None:
         for r in [n for n in cneg if n["candidates"] and n["calls"]][:2]:
             show.append((r, f"{r['seq']} camera, people walking through"))
         pair_cards = "\n".join(cctv_card(r, cap) for r, cap in show)
+
+        # Clear liquids: water is transparent, so only darkening and sheen give it away. Its own block.
+        water = [r for r in cpos if r["kind"] == "water"]
+        water_found = [r for r in water if r["pred"]]
+        wshow = []
+        for s in seqs:
+            best = sorted((r for r in water_found if r["seq"] == s), key=lambda r: -r["confidence"])[:1]
+            wshow += [(r, f"{s} camera, water") for r in best]
+        smallest = sorted(water_found, key=lambda r: r["spill_width_frac"])[:1]
+        wshow += [(r, f"{r['seq']} camera, the smallest water spill found, {r['spill_width_frac']*100:.0f}% of frame width")
+                  for r in smallest if r["id"] not in {x["id"] for x, _ in wshow}]
+        wmiss = [r for r in water if not r["pred"]][:1]
+        wshow += [(r, f"{r['seq']} camera, a water spill it missed") for r in wmiss]
+        water_cards = "\n".join(cctv_card(r, cap) for r, cap in wshow)
+        water_smallest_w = min((r["spill_width_frac"] for r in water_found), default=0)
         calls_per = cs["model_calls"] / n_pairs
         c_cost_pair = cs["this_run"]["est_cost_usd"] / cs["this_run"]["pairs"] if cs["this_run"]["pairs"] else 0
         f_cost_pair = fs["this_run"]["est_cost_usd"] / fs["this_run"]["pairs"] if fs and fs["this_run"]["pairs"] else 0
@@ -372,6 +387,12 @@ def main() -> None:
     <p style="color:var(--fg-2)">Pairs below are exactly what the model saw: the same crop from the reference, the current frame and two seconds later. The amber box is the model's answer, the thin green box is the true spill. Captions name the camera and the truth.</p>
   </div>
   <div class="gallery pairs">{pair_cards}</div>
+  <div class="prose">
+    <p class="eyebrow" style="margin-top:16px">Clear liquids</p>
+    <h3 style="margin-top:6px">Water is the hard case, and it is found</h3>
+    <p style="margin-top:8px;color:var(--fg-2)">Water has no colour of its own. On a floor it shows only as a darkening of the surface, a soft outline and a slight sheen, which is also how a shadow or a polished patch looks. The model found <strong>{len(water_found)} of {len(water)}</strong> water spills across the mall cameras, down to one {water_smallest_w*100:.0f}% of the frame wide. Its reasoning on these consistently names the darkening and the fact that the patch stays put and touches no one. Coloured liquids for comparison: coffee {sum(1 for r in cpos if r['kind']=='coffee' and r['pred'])} of {sum(1 for r in cpos if r['kind']=='coffee')}, cola {sum(1 for r in cpos if r['kind']=='cola' and r['pred'])} of {sum(1 for r in cpos if r['kind']=='cola')}, juice {sum(1 for r in cpos if r['kind']=='juice' and r['pred'])} of {sum(1 for r in cpos if r['kind']=='juice')}, oil {sum(1 for r in cpos if r['kind']=='oil' and r['pred'])} of {sum(1 for r in cpos if r['kind']=='oil')}.</p>
+  </div>
+  <div class="gallery pairs">{water_cards}</div>
   <div class="tablewrap"><table>
     <thead><tr><th></th><th>The pipeline: persistent crops, three frames ({n_pairs} pairs)</th><th>Whole frame, two frames, no candidate step ({fs['pairs'] if fs else 0} pairs, every third)</th></tr></thead>
     <tbody>
